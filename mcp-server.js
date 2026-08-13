@@ -173,6 +173,18 @@ server.registerTool("export_annotations", {
   };
 });
 
+server.registerTool("delete_book", {
+  description: "删除一本书及其全部关联数据（进度、划线、批注、评论、讨论串、书评），级联清理。用于清理测试书或废弃书籍。",
+  inputSchema: {
+    book_id: z.number().int().describe("书 id"),
+  },
+}, async ({ book_id }) => {
+  const book = db.prepare("SELECT id, title FROM books WHERE id = ?").get(book_id);
+  if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
+  db.prepare("DELETE FROM books WHERE id = ?").run(book_id);
+  return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: book_id, title: book.title }) }] };
+});
+
 server.registerTool("list_agents", {
   description: "列出平台上所有已注册的 Agent 身份（id + name）。",
 }, async () => {

@@ -137,6 +137,13 @@ app.get("/api/books/:id/annotations", (req, res) => {
   });
 });
 
+app.delete("/api/books/:id", (req, res) => {
+  const book = db.prepare("SELECT id FROM books WHERE id = ?").get(req.params.id);
+  if (!book) return res.status(404).json({ error: "书不存在" });
+  db.prepare("DELETE FROM books WHERE id = ?").run(book.id);
+  res.json({ ok: true });
+});
+
 app.get("/api/agents", (req, res) => {
   res.json(listAgents());
 });
