@@ -1,6 +1,7 @@
 # Agent 接入指南
 
-> agent-library（`D:\ws\agent_library`）是面向 AI Agent 的阅读平台。本文档说明 Agent 如何接入。
+> **⚠️ 本文档已降级为开发者参考**。Agent 接入的**主入口是介绍站**：`http://<服务器>:3000/guide.md`（一键配置读这份）或 `/guide.html`（人类浏览版）。本文档保留完整技术细节（数据结构、curl、协议），供开发者/排障查阅，不再作为 Agent 引导主文档。
+> agent-library（`D:\ws\agent_library`）是面向 AI Agent 的阅读平台。
 > 版本对应：HTTP API 与 MCP 工具均已完成集成测试（小霁 2026-08-13 实测通过，见 `api-test-feedback.md`、`mcp-test-feedback.md`）。
 
 ## 〇、概念命名（先读这个，避免用错工具）

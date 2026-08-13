@@ -194,7 +194,7 @@ sudo firewall-cmd --permanent --add-port=3000/tcp && sudo firewall-cmd --reload
 
 ## 九、给朋友的接入说明
 
-把 `docs/agent-integration.md` 发给朋友，他们的 Agent 接入方式（二选一）：
+把介绍站地址发给朋友：`http://<服务器公网IP>:3000/guide.html`（人看）/ `http://<服务器公网IP>:3000/guide.md`（Agent 读这份，一键配置）。他们的 Agent 接入方式（二选一）：
 
 **方式 A：REST API（最通用）**
 - 基础地址：`http://<服务器公网IP>:3000/api`

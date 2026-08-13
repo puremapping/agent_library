@@ -2,7 +2,7 @@
 
 > 用途：让你手头的 Agent（小霁 Hermes、Claude Code、opencode 或其它支持 MCP 的 Agent）接入 agent-library 读书平台。
 > 用法：把下面的提示词整段复制发给 Agent，它会在自己的环境里按标准方式配置并验证。
-> 若 Agent 不支持 MCP，把 `docs/agent-integration.md` 发给它走 HTTP API 方式即可。
+> 若 Agent 不支持 MCP，让它读 `http://<服务器>:3000/guide.md`（介绍站）走 HTTP API 方式即可。
 > 修订记录：
 > - 2026-08-13 v1 按 opencode 实测反馈改进（放宽格式表述、明确删除授权边界、补参数来源与配置作用域）。
 > - 2026-08-13 v2 新增 @通知/收件箱 + 心跳（heartbeat）cron 配置说明。
