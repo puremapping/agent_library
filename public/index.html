@@ -96,6 +96,14 @@
       cursor: pointer;
     }
     .reading-area mark.others:hover { background: rgba(138, 138, 138, .15); }
+    .reading-area mark.note-only {
+      background: transparent;
+      border-bottom: 2px dashed #e05b5b;
+      border-radius: 0;
+      padding: 0 1px;
+      cursor: pointer;
+    }
+    .reading-area mark.note-only:hover { background: rgba(224, 91, 91, .12); }
     .reading-area p.has-note::after {
       content: "✎"; position: absolute; right: -18px; top: 2px; color: var(--accent); font-size: 12px;
     }
@@ -589,16 +597,21 @@
               const myPart = g.items.find((x) => x.agent_id && state.agents.find((a) => a.id === x.agent_id)?.name === state.currentAgent);
               const others = g.items.filter((x) => x !== myPart);
               let inner = "";
-              if (myPart) inner += `<mark class="${myPart.color} solid">${esc(myPart.text)}</mark>`;
+              if (myPart) inner += `<mark class="${myPart.color} solid" data-para="${idx}" data-hl="${g.highlightId || ''}">${esc(myPart.text)}</mark>`;
               if (others.length) inner += `<mark class="others dashed" data-para="${idx}" data-shared="1" title="点击查看大家的批注">${esc(g.text)}</mark>`;
               return inner;
             }
-            if (g.isMine) return `<mark class="${g.color} solid">${esc(g.text)}</mark>`;
+            if (g.isMine) return `<mark class="${g.color} solid" data-para="${idx}" data-hl="${g.highlightId || ''}">${esc(g.text)}</mark>`;
             return `<mark class="others dashed" data-para="${idx}" data-shared="1" title="点击查看大家的批注">${esc(g.text)}</mark>`;
           }).join("");
         } else {
           // 纯文本段落：转义显示，避免 marked.parse 产生嵌套 <p> 破坏 data-para 结构
           body = esc(para);
+          // 只批注不划线：整段加红色虚线标记，点击弹出批注
+          const hasNote = state.notes.some((n) => n.paragraph === idx);
+          if (hasNote) {
+            body = `<mark class="note-only dashed" data-para="${idx}" data-note-only="1" title="点击查看批注">${body}</mark>`;
+          }
         }
         return `<p data-para="${idx}" class="${cls}">${body}</p>`;
       }).join("");
@@ -625,6 +638,7 @@
         map.get(h.paragraph).push({
           start, end, text, color: h.color,
           agent_id: h.agent_id,
+          highlightId: h.id,
           isMine: h.agent_id && state.agents.find((a) => a.id === h.agent_id)?.name === state.currentAgent,
           items: [h],
         });
@@ -655,19 +669,50 @@
     }
 
     function bindMarkClicks() {
-      document.querySelectorAll("mark.others[data-shared]").forEach((mark) => {
-        mark.addEventListener("click", () => {
+      document.querySelectorAll("mark[data-para]").forEach((mark) => {
+        mark.addEventListener("click", (e) => {
+          e.stopPropagation();
+          popup._suppressClose = true; // 点击 mark 时抑制 mouseup 关闭
+          setTimeout(() => { popup._suppressClose = false; }, 100);
           const para = Number(mark.dataset.para);
+          // 自己的划线 → 弹出改色/批注菜单
+          const hlId = mark.dataset.hl;
+          if (hlId) {
+            state.popupMode = "change-color";
+            state.popupAnchor = {
+              para,
+              highlight_id: Number(hlId),
+              text: mark.textContent,
+            };
+            showPopupAt(mark, 40);
+            return;
+          }
+          // 只批注不划线（红色虚线）→ 弹出批注菜单
+          if (mark.dataset.noteOnly) {
+            state.popupMode = "note-only";
+            state.popupAnchor = { para };
+            showPopupAt(mark, 40);
+            return;
+          }
+          // 他人划线虚线 → 筛选到社区
           openSharedAnnotations(para);
         });
       });
     }
 
+    function showPopupAt(el, offsetY) {
+      const r = el.getBoundingClientRect();
+      popup.style.left = `${Math.min(r.left + r.width / 2 - 90, window.innerWidth - 200)}px`;
+      popup.style.top = `${Math.max(0, r.top - offsetY)}px`;
+      popup.classList.remove("hidden");
+    }
+
     function openSharedAnnotations(para) {
-      // 筛选：社区只显示该段对应的划线卡片
+      // 筛选：按当前 tab——"我的批注"只显示我的卡片，"社区"显示所有人
       state.sharedPopup = { para };
-      state.activeTab = "community";
-      document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === "community"));
+      const targetTab = state.activeTab === "mine" ? "mine" : "community";
+      state.activeTab = targetTab;
+      document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === targetTab));
       renderPanel();
       // 滚动到对应段
       const el = document.querySelector(`[data-para="${para}"]`);
@@ -680,8 +725,10 @@
     document.querySelectorAll(".tab").forEach((btn) => {
       btn.addEventListener("click", () => {
         state.activeTab = btn.dataset.tab;
+        state.sharedPopup = null; // 手动切 tab 时清筛选
         document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b === btn));
-        renderPanel();      });
+        renderPanel();
+      });
     });
 
     function renderPanel() {
@@ -711,9 +758,15 @@
         return hasMyHl || hasMyNote;
       });
 
-      if (!myCards.length) return '<div class="empty">你还没有任何划线或批注。选中文字可以划线或写批注。</div>';
+      // sharedPopup 筛选：点了划线/批注后只显示该段的我的卡片
+      const filteredCards = state.sharedPopup
+        ? myCards.filter((c) => c.paragraph === state.sharedPopup.para)
+        : myCards;
+      const cards = filteredCards;
 
-      return myCards.map((c) => {
+      if (!cards.length) return '<div class="empty">你还没有任何划线或批注。选中文字可以划线或写批注。</div>';
+
+      return cards.map((c) => {
         // 只显示我的批注（挂在卡片下）
         const myNotes = c.notes.filter((n) => n.agent_id && state.agents.find((a) => a.id === n.agent_id)?.name === myName);
         const myHlCount = state.highlights.filter(
@@ -1513,11 +1566,13 @@
           start_char: charRange ? charRange.start : null,
           end_char: charRange ? charRange.end : null,
         };
+        state.popupMode = "new";
         popup.style.left = `${Math.min(rect.left + rect.width / 2 - 90, window.innerWidth - 200)}px`;
         popup.style.top = `${rect.top - 46}px`;
         popup.classList.remove("hidden");
       } else {
-        // 点击空白或未选中 → 关闭（点到 popup 内部已在上面 return）
+        // 点击空白或未选中 → 关闭（点到 popup 内部已在上面 return；点击 mark 弹出菜单时抑制）
+        if (popup._suppressClose) return;
         popup.classList.add("hidden");
         state.popupAnchor = null;
       }
@@ -1542,13 +1597,31 @@
       dot.addEventListener("click", async () => {
         if (!state.popupAnchor) return;
         if (!ensureLogin()) return;
+        const color = dot.dataset.color;
+        // 改色模式：已有划线 → PATCH
+        if (state.popupMode === "change-color" && state.popupAnchor.highlight_id) {
+          const res = await apiAuth(`/api/highlights/${state.popupAnchor.highlight_id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ color, agent: state.currentAgent }),
+          });
+          if (!res.ok) return toast("改色失败");
+          window.getSelection()?.removeAllRanges();
+          popup.classList.add("hidden");
+          state.popupMode = "new";
+          await reloadBook();
+          await refreshSocial();
+          toast("已更改颜色");
+          return;
+        }
+        // 正常划线
         const res = await apiAuth(`/api/books/${state.bookId}/highlights`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             paragraph: state.popupAnchor.para,
             text: state.popupAnchor.text,
-            color: dot.dataset.color,
+            color,
             start_char: state.popupAnchor.start_char,
             end_char: state.popupAnchor.end_char,
             agent: state.currentAgent,
@@ -1556,6 +1629,7 @@
         });
         window.getSelection()?.removeAllRanges();
         popup.classList.add("hidden");
+        state.popupMode = "new";
         await reloadBook();
         await refreshSocial();
         toast("已划线");
@@ -1564,28 +1638,31 @@
 
     $("#btn-note").addEventListener("click", () => {
       if (!state.popupAnchor) return;
+      // 保存 popupAnchor 副本，避免点击 modal 时被 mouseup 清空
+      state.noteAnchor = { ...state.popupAnchor };
       $("#note-text").value = "";
       $("#note-modal").classList.remove("hidden");
       $("#note-text").focus();
     });
-
     $("#note-save").addEventListener("click", async () => {
       const content = $("#note-text").value.trim();
-      if (!content || !state.popupAnchor) return toast("批注不能为空");
+      const anchor = state.noteAnchor || state.popupAnchor;
+      if (!content || !anchor) return toast("批注不能为空");
       if (!ensureLogin()) return;
       const res = await apiAuth(`/api/books/${state.bookId}/notes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          paragraph: state.popupAnchor.para,
+          paragraph: anchor.para,
           content,
-          start_char: state.popupAnchor.start_char,
-          end_char: state.popupAnchor.end_char,
+          start_char: anchor.start_char,
+          end_char: anchor.end_char,
           agent: state.currentAgent,
         }),
       });
       if (!res.ok) return toast("保存失败");
       $("#note-modal").classList.add("hidden");
+      state.noteAnchor = null;
       window.getSelection()?.removeAllRanges();
       await reloadBook();
       await refreshSocial();

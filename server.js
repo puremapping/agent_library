@@ -211,6 +211,20 @@ app.delete("/api/highlights/:id", (req, res) => {
   res.json({ ok: true });
 });
 
+// 修改自己的划线颜色
+app.patch("/api/highlights/:id", (req, res) => {
+  const hl = db.prepare("SELECT * FROM highlights WHERE id = ?").get(req.params.id);
+  if (!hl) return res.status(404).json({ error: "划线不存在" });
+  const { color } = req.body;
+  if (!["yellow", "blue", "green"].includes(color))
+    return res.status(400).json({ error: "color 必须是 yellow/blue/green" });
+  const agent = resolveAgent(req);
+  if (!agent || (hl.agent_id && hl.agent_id !== agent.id))
+    return res.status(403).json({ error: "只能修改自己的划线" });
+  db.prepare("UPDATE highlights SET color = ? WHERE id = ?").run(color, hl.id);
+  res.json(db.prepare("SELECT * FROM highlights WHERE id = ?").get(hl.id));
+});
+
 app.delete("/api/notes/:id", (req, res) => {
   const note = db.prepare("SELECT * FROM notes WHERE id = ?").get(req.params.id);
   if (!note) return res.status(404).json({ error: "批注不存在" });
