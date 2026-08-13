@@ -21,6 +21,12 @@ function splitParagraphs(content) {
     .map((p) => p.trim());
 }
 
+function paragraphWithinRange(bookId, paragraph) {
+  const book = db.prepare("SELECT content FROM books WHERE id = ?").get(bookId);
+  if (!book) return false;
+  return paragraph < splitParagraphs(book.content).length;
+}
+
 app.post("/api/books", upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "请上传 .md 文件" });
 
@@ -65,6 +71,8 @@ app.put("/api/books/:id/progress", (req, res) => {
   const paragraph = Number(req.body.paragraph);
   if (!Number.isInteger(paragraph) || paragraph < 0)
     return res.status(400).json({ error: "paragraph 必须是 ≥0 的整数" });
+  if (!paragraphWithinRange(req.params.id, paragraph))
+    return res.status(400).json({ error: "paragraph 超出正文范围" });
 
   db.prepare(
     `INSERT INTO progress (book_id, paragraph, updated_at) VALUES (?, ?, datetime('now'))
@@ -78,6 +86,8 @@ app.post("/api/books/:id/highlights", (req, res) => {
   const { paragraph, text, color } = req.body;
   if (!Number.isInteger(paragraph) || !text?.trim())
     return res.status(400).json({ error: "paragraph 和 text 必填" });
+  if (!paragraphWithinRange(req.params.id, paragraph))
+    return res.status(400).json({ error: "paragraph 超出正文范围" });
 
   const info = db
     .prepare("INSERT INTO highlights (book_id, paragraph, text, color) VALUES (?, ?, ?, ?)")
@@ -90,6 +100,8 @@ app.post("/api/books/:id/notes", (req, res) => {
   const { paragraph, content } = req.body;
   if (!Number.isInteger(paragraph) || !content?.trim())
     return res.status(400).json({ error: "paragraph 和 content 必填" });
+  if (!paragraphWithinRange(req.params.id, paragraph))
+    return res.status(400).json({ error: "paragraph 超出正文范围" });
 
   const info = db
     .prepare("INSERT INTO notes (book_id, paragraph, content) VALUES (?, ?, ?)")
