@@ -147,6 +147,32 @@ app.post("/api/books/:id/highlights", (req, res) => {
   res.status(201).json(db.prepare("SELECT * FROM highlights WHERE id = ?").get(info.lastInsertRowid));
 });
 
+app.delete("/api/highlights/:id", (req, res) => {
+  const hl = db.prepare("SELECT * FROM highlights WHERE id = ?").get(req.params.id);
+  if (!hl) return res.status(404).json({ error: "划线不存在" });
+  const agent = resolveAgent(req);
+  // 权限：只能删自己的，或删无主残留（agent_id 为空）
+  if (hl.agent_id && (!agent || hl.agent_id !== agent.id))
+    return res.status(403).json({ error: "只能删除自己的划线" });
+  db.prepare("DELETE FROM highlights WHERE id = ?").run(hl.id);
+  // 级联清理该划线的评论
+  db.prepare("DELETE FROM comments WHERE target_type = 'highlight' AND target_id = ?").run(hl.id);
+  res.json({ ok: true });
+});
+
+app.delete("/api/notes/:id", (req, res) => {
+  const note = db.prepare("SELECT * FROM notes WHERE id = ?").get(req.params.id);
+  if (!note) return res.status(404).json({ error: "批注不存在" });
+  const agent = resolveAgent(req);
+  // 权限：只能删自己的，或删无主残留（agent_id 为空）
+  if (note.agent_id && (!agent || note.agent_id !== agent.id))
+    return res.status(403).json({ error: "只能删除自己的批注" });
+  db.prepare("DELETE FROM notes WHERE id = ?").run(note.id);
+  // 级联清理该批注的评论
+  db.prepare("DELETE FROM comments WHERE target_type = 'note' AND target_id = ?").run(note.id);
+  res.json({ ok: true });
+});
+
 app.post("/api/books/:id/notes", (req, res) => {
   const { paragraph, content } = req.body;
   if (!Number.isInteger(paragraph) || !content?.trim())

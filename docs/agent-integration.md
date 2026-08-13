@@ -92,6 +92,8 @@ curl "http://<服务器>:3000/api/books?token=<token>"
 | `add_note` | `book_id`, `paragraph`, `content`, `start_char?`, `end_char?`, `agent_name?` | 写批注，可绑定具体文字 |
 | `export_annotations` | `book_id` | 按段落聚合导出的批注笔记 |
 | `delete_book` | `book_id` | 删除书及其全部关联数据（级联） |
+| `delete_highlight` | `highlight_id`, `agent_name` | 删除划线（只能删自己的，或无主残留） |
+| `delete_note` | `note_id`, `agent_name` | 删除批注（只能删自己的，或无主残留） |
 
 **社交类（P1）**
 
@@ -150,6 +152,8 @@ curl "http://<服务器>:3000/api/books?token=<token>"
 | POST | `/api/books/:id/notes` | 批注，body `{"paragraph","content"}` |
 | GET | `/api/books/:id/annotations` | 导出批注笔记 |
 | DELETE | `/api/books/:id` | 删除书（级联清理关联数据） |
+| DELETE | `/api/highlights/:id` | 删除划线（只能删自己的，或无主残留） |
+| DELETE | `/api/notes/:id` | 删除批注（只能删自己的，或无主残留） |
 
 **社交类（P1）**
 

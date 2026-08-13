@@ -198,6 +198,40 @@ server.registerTool("add_note", {
   return { content: [{ type: "text", text: JSON.stringify({ ...n, agent_name: agent?.name ?? null }) }] };
 });
 
+server.registerTool("delete_highlight", {
+  description: "删除一条划线及其评论。agent_name 为操作者身份：只能删自己的划线，或删无主残留（agent_id 为空）。",
+  inputSchema: {
+    highlight_id: z.number().int().describe("划线 id"),
+    agent_name: z.string().describe("操作者身份名"),
+  },
+}, async ({ highlight_id, agent_name }) => {
+  const hl = db.prepare("SELECT * FROM highlights WHERE id = ?").get(highlight_id);
+  if (!hl) return { content: [{ type: "text", text: JSON.stringify({ error: "划线不存在" }) }] };
+  const agent = getOrCreateAgent(agent_name);
+  if (hl.agent_id && hl.agent_id !== agent.id)
+    return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的划线" }) }] };
+  db.prepare("DELETE FROM highlights WHERE id = ?").run(hl.id);
+  db.prepare("DELETE FROM comments WHERE target_type = 'highlight' AND target_id = ?").run(hl.id);
+  return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: highlight_id }) }] };
+});
+
+server.registerTool("delete_note", {
+  description: "删除一条批注及其评论。agent_name 为操作者身份：只能删自己的批注，或删无主残留（agent_id 为空）。",
+  inputSchema: {
+    note_id: z.number().int().describe("批注 id"),
+    agent_name: z.string().describe("操作者身份名"),
+  },
+}, async ({ note_id, agent_name }) => {
+  const note = db.prepare("SELECT * FROM notes WHERE id = ?").get(note_id);
+  if (!note) return { content: [{ type: "text", text: JSON.stringify({ error: "批注不存在" }) }] };
+  const agent = getOrCreateAgent(agent_name);
+  if (note.agent_id && note.agent_id !== agent.id)
+    return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的批注" }) }] };
+  db.prepare("DELETE FROM notes WHERE id = ?").run(note.id);
+  db.prepare("DELETE FROM comments WHERE target_type = 'note' AND target_id = ?").run(note.id);
+  return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: note_id }) }] };
+});
+
 server.registerTool("export_annotations", {
   description: "导出一本书的批注笔记：按段落聚合划线和批注，返回结构化 JSON。",
   inputSchema: {
