@@ -596,8 +596,14 @@
           parts.push({ start: m.start, end: m.end, html: `<mark class="${m.color} solid" data-para="${idx}" data-hl="${m.highlightId}">${esc(m.text)}</mark>` });
         }
         // 2. 我的批注 → 红色虚线（note 无 start_char 时整段）
+        // 已有我的高亮覆盖该批注范围 → 不显示红色虚线（批注挂在高亮上，避免重复）
         const myNotes = state.notes.filter((n) => n.paragraph === idx && n.agent_id && state.agents.find((a) => a.id === n.agent_id)?.name === state.currentAgent);
         for (const n of myNotes) {
+          const nStart = n.start_char != null && n.end_char != null && n.end_char <= para.length ? n.start_char : 0;
+          const nEnd = n.start_char != null && n.end_char != null && n.end_char <= para.length ? n.end_char : para.length;
+          // 若我的高亮完整覆盖该批注范围，跳过（避免红虚线重复）
+          const covered = layer.mine.some((m) => m.start <= nStart && m.end >= nEnd);
+          if (covered) continue;
           if (n.start_char != null && n.end_char != null && n.end_char <= para.length) {
             parts.push({ start: n.start_char, end: n.end_char, html: `<mark class="note-only dashed" data-para="${idx}" data-note-only="1">${esc(para.slice(n.start_char, n.end_char))}</mark>` });
           } else {
@@ -730,20 +736,33 @@
           // 自己的划线（彩色实线）→ 筛选"我的批注" + 弹出改色/批注菜单
           if (mark.dataset.hl) {
             const hlId = Number(mark.dataset.hl);
+            const hl = state.highlights.find((h) => h.id === hlId);
+            const paraText = state.paragraphs[para] || "";
+            const hasRange = hl && hl.start_char != null && hl.end_char != null && hl.end_char <= paraText.length;
             state.popupMode = "change-color";
             state.popupAnchor = {
               para,
               highlight_id: hlId,
               text: mark.textContent,
+              start_char: hasRange ? hl.start_char : 0,
+              end_char: hasRange ? hl.end_char : paraText.length,
             };
             openMineFilter(para);
             showPopupAt(mark, 40);
             return;
           }
-          // 红色虚线（我的批注）→ 筛选"我的批注" + 弹出批注菜单
+          // 红色虚线（我的批注）→ 筛选"我的批注" + 弹出批注/改色菜单
           if (mark.dataset.noteOnly) {
             state.popupMode = "note-only";
-            state.popupAnchor = { para };
+            const myNote = state.notes.find((n) => n.paragraph === para && n.agent_id && state.agents.find((a) => a.id === n.agent_id)?.name === state.currentAgent);
+            const paraText = state.paragraphs[para] || "";
+            const hasRange = myNote && myNote.start_char != null && myNote.end_char != null && myNote.end_char <= paraText.length;
+            state.popupAnchor = {
+              para,
+              text: hasRange ? paraText.slice(myNote.start_char, myNote.end_char) : mark.textContent,
+              start_char: hasRange ? myNote.start_char : 0,
+              end_char: hasRange ? myNote.end_char : paraText.length,
+            };
             openMineFilter(para);
             showPopupAt(mark, 40);
             return;
@@ -1626,8 +1645,51 @@
       if (text && paraEl) {
         const charRange = selectionCharRange(paraEl);
         const rect = sel.getRangeAt(0).getBoundingClientRect();
+        const para = Number(paraEl.dataset.para);
+        // 交叉校验：选中范围与我的既有划线/批注交叉时，操作指向既有对象整体
+        const myHls = state.highlights.filter((h) => h.paragraph === para && h.agent_id && state.agents.find((a) => a.id === h.agent_id)?.name === state.currentAgent);
+        const myNs = state.notes.filter((n) => n.paragraph === para && n.agent_id && state.agents.find((a) => a.id === n.agent_id)?.name === state.currentAgent);
+        const selStart = charRange ? charRange.start : 0;
+        const selEnd = charRange ? charRange.end : state.paragraphs[para].length;
+        let collision = null;
+        for (const h of myHls) {
+          const hs = h.start_char != null ? h.start_char : state.paragraphs[para].indexOf(h.text);
+          const he = h.end_char != null ? h.end_char : (hs >= 0 ? hs + h.text.length : -1);
+          if (hs >= 0 && selStart < he && selEnd > hs) { collision = { type: "highlight", id: h.id, start: hs, end: he, text: h.text }; break; }
+        }
+        if (!collision) {
+          for (const n of myNs) {
+            const paraText = state.paragraphs[para];
+            const hasRange = n.start_char != null && n.end_char != null && n.end_char <= paraText.length;
+            const ns = hasRange ? n.start_char : 0;
+            const ne = hasRange ? n.end_char : paraText.length;
+            if (selStart < ne && selEnd > ns) { collision = { type: "note", id: n.id, start: ns, end: ne, text: hasRange ? paraText.slice(ns, ne) : paraText }; break; }
+          }
+        }
+        if (collision) {
+          // 操作指向既有对象整体
+          state.popupAnchor = {
+            para,
+            text: collision.text,
+            start_char: collision.start,
+            end_char: collision.end,
+          };
+          if (collision.type === "highlight") {
+            state.popupMode = "change-color";
+            state.popupAnchor.highlight_id = collision.id;
+          } else {
+            state.popupMode = "note-only";
+          }
+          popup._suppressClose = true;
+          setTimeout(() => { popup._suppressClose = false; }, 100);
+          popup.style.left = `${Math.min(rect.left + rect.width / 2 - 90, window.innerWidth - 200)}px`;
+          popup.style.top = `${rect.top - 46}px`;
+          popup.classList.remove("hidden");
+          toast("选中范围与你的既有标注重叠，已指向该标注整体");
+          return;
+        }
         state.popupAnchor = {
-          para: Number(paraEl.dataset.para),
+          para,
           text,
           start_char: charRange ? charRange.start : null,
           end_char: charRange ? charRange.end : null,
@@ -1678,6 +1740,29 @@
           await reloadBook();
           await refreshSocial();
           toast("已更改颜色");
+          return;
+        }
+        // note-only 改色：把红色虚线替换为高亮（创建高亮，用批注范围）
+        if (state.popupMode === "note-only" && state.popupAnchor.start_char != null) {
+          const res = await apiAuth(`/api/books/${state.bookId}/highlights`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              paragraph: state.popupAnchor.para,
+              text: state.popupAnchor.text,
+              color,
+              start_char: state.popupAnchor.start_char,
+              end_char: state.popupAnchor.end_char,
+              agent: state.currentAgent,
+            }),
+          });
+          if (!res.ok) return toast("改色失败");
+          window.getSelection()?.removeAllRanges();
+          popup.classList.add("hidden");
+          state.popupMode = "new";
+          await reloadBook();
+          await refreshSocial();
+          toast("已更改为高亮");
           return;
         }
         // 正常划线
