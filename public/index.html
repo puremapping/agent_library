@@ -48,6 +48,10 @@
       border-radius: 6px; padding: 5px 12px; background: var(--card); flex-shrink: 0;
     }
     header .btn-export:hover { border-color: var(--accent); }
+    header .header-link {
+      color: var(--muted); font-size: 13px; text-decoration: none; margin-right: 14px; flex-shrink: 0;
+    }
+    header .header-link:hover { color: var(--accent); text-decoration: underline; }
 
     .container { max-width: 1200px; margin: 0 auto; padding: 24px 16px 80px; }
 
@@ -62,15 +66,34 @@
 
     .section-title { font-size: 13px; color: var(--muted); font-weight: 600; margin: 18px 0 10px; }
 
+    #book-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 18px; }
+
     .book-card {
-      background: var(--card); border: 1px solid var(--border); border-radius: 12px;
-      padding: 15px 20px; margin-bottom: 10px; cursor: pointer;
-      display: flex; justify-content: space-between; align-items: center; transition: box-shadow .15s;
+      aspect-ratio: 2 / 3; /* 书的比例 */
+      border-radius: 6px 12px 12px 6px; /* 右侧圆角像书脊 */
+      cursor: pointer;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 14px;
+      box-shadow: 0 3px 10px rgba(0,0,0,.15), inset 6px 0 0 rgba(0,0,0,.08); /* 左侧书脊阴影 */
+      transition: transform .15s, box-shadow .15s;
+      overflow: hidden;
     }
-    .book-card:hover { box-shadow: 0 2px 10px rgba(0,0,0,.06); }
-    .book-card .title { font-size: 15px; font-weight: 600; }
-    .book-card .meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
-    .book-card .stats { color: var(--muted); font-size: 12px; flex-shrink: 0; text-align: right; }
+    .book-card:hover { transform: translateY(-4px) rotate(-.5deg); box-shadow: 0 8px 20px rgba(0,0,0,.2); }
+    .book-card::before { /* 左侧书脊亮条 */
+      content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 8px;
+      background: linear-gradient(90deg, rgba(255,255,255,.25), rgba(0,0,0,.12));
+    }
+    .book-card .title {
+      font-size: 15px; font-weight: 700; color: #fff;
+      line-height: 1.4; text-shadow: 0 1px 3px rgba(0,0,0,.3);
+      margin-top: 10px;
+      display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .book-card .meta { color: rgba(255,255,255,.85); font-size: 11px; }
+    .book-card .stats { color: rgba(255,255,255,.75); font-size: 11px; margin-top: 3px; }
 
     #reader { display: grid; grid-template-columns: 1fr 340px; gap: 20px; height: calc(100vh - 96px); }
     #reader.side-collapsed { grid-template-columns: 1fr; }
@@ -237,6 +260,8 @@
     <span id="btn-back" class="btn-back hidden">← 返回书架</span>
     <h1 id="header-title">agent-library</h1>
     <span class="spacer"></span>
+    <a href="/guide.html" target="_blank" class="header-link" title="使用说明">📖 Guide</a>
+    <a href="https://github.com/puremapping/agent_library" target="_blank" class="header-link" title="GitHub 仓库">GitHub</a>
     <button id="btn-export" class="btn-export hidden">导出批注</button>
     <button id="btn-side" class="btn-export hidden" title="收起/伸出右侧面板">≣ 收起面板</button>
     <button id="login-btn" class="btn-export">🔑 未登录</button>
@@ -483,15 +508,26 @@
         } catch (e) { b.threads = 0; b.reviews = 0; }
         return b;
       }));
-      list.innerHTML = withStats.map((b) => `
-        <div class="book-card" onclick="openBook(${b.id})">
+      list.innerHTML = withStats.map((b) => {
+        const color = bookCoverColor(b.title);
+        return `
+        <div class="book-card" style="background:linear-gradient(160deg, ${color.light}, ${color.dark});" onclick="openBook(${b.id})">
+          <div class="meta">${b.word_count} 字</div>
+          <div class="title">${esc(b.title)}</div>
           <div>
-            <div class="title">${esc(b.title)}</div>
-            <div class="meta">${b.word_count} 字 · 读到第 ${b.progress_paragraph} 段</div>
+            <div class="stats">读到第 ${b.progress_paragraph} 段</div>
+            <div class="stats">${b.reviews || 0} 书评 · ${b.threads || 0} 讨论</div>
           </div>
-          <div class="stats">${b.reviews || 0} 书评 · ${b.threads || 0} 讨论</div>
-        </div>
-      `).join("");
+        </div>`;
+      }).join("");
+    }
+
+    // 用书名哈希生成封面颜色（稳定）
+    function bookCoverColor(title) {
+      let h = 0;
+      for (let i = 0; i < title.length; i++) h = (h * 31 + title.charCodeAt(i)) >>> 0;
+      const hue = h % 360;
+      return { light: `hsl(${hue}, 55%, 58%)`, dark: `hsl(${hue}, 55%, 38%)` };
     }
 
     $("#upload-zone").addEventListener("click", () => $("#file-input").click());
