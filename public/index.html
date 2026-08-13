@@ -785,6 +785,7 @@
           start_char: s.start_char,
           end_char: s.end_char,
           title,
+          highlights: hl,
           highlightCount: hl.length,
           hlCount,
           notes: s.notes,
@@ -1188,12 +1189,18 @@
           const liked = btn.dataset.liked === "true";
           let payload;
           if (type === "seg") {
-            // 段级点赞：对该段第一条划线点赞作为代表
+            // 段级点赞：优先对该段第一条划线点赞；无划线只有批注时，对第一条批注点赞
             const segCard = btn.closest("[data-seg]");
             const card = segCard ? buildSegmentCards().find((c) => segCard.dataset.seg === c.key) : null;
             const firstHl = card && card.highlights && card.highlights[0];
-            if (!firstHl) return toast("这段还没有划线，先划线才能点赞");
-            payload = { target_type: "highlight", target_id: firstHl.id };
+            const firstNote = card && card.notes && card.notes[0];
+            if (firstHl) {
+              payload = { target_type: "highlight", target_id: firstHl.id };
+            } else if (firstNote) {
+              payload = { target_type: "note", target_id: firstNote.id };
+            } else {
+              return toast("这段还没有内容可点赞");
+            }
           } else {
             const id = Number(btn.dataset.id);
             payload = { target_type: type, target_id: id };
