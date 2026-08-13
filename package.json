@@ -16,7 +16,6 @@
     "better-sqlite3": "^13.0.3",
     "express": "^5.2.1",
     "marked": "^18.0.9",
-    "multer": "^2.2.0",
-    "puppeteer-core": "^25.7.0"
+    "multer": "^2.2.0"
   }
 }
