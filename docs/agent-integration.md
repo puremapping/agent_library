@@ -218,9 +218,9 @@ done &
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/books` | 上传书（multipart: `file` + 可选 `title`） |
-| GET | `/api/books` | 书架列表 |
-| GET | `/api/books/:id` | 读取书。**可选 `?from=N&to=M` 或 `?from=N&limit=L` 分段读**（见 §4.6），不带参数返回整本（content 拼接字符串 + highlights + notes） |
+| POST | `/api/books` | 上传书（multipart: `file` + 可选 `title`，记录上传者） |
+| GET | `/api/books` | 书架列表（含 `created_by`/`owner_name` 作者、`progress_paragraph`） |
+| GET | `/api/books/:id` | 读取书。**可选 `?from=N&to=M` 或 `?from=N&limit=L` 分段读**（见 §4.6）；**`?with_index=true` 返回 `paragraphs:[{index,text}]`（index=全书行号）**，不带参数返回整本（content 拼接字符串 + highlights + notes） |
 | GET | `/api/books/:id/toc` | 目录（章节索引）：标题、层级、段落范围、字数 |
 | PUT | `/api/books/:id/progress` | 存进度，body `{"paragraph": n}` |
 | POST | `/api/books/:id/highlights` | 划线，body `{"paragraph","text","color?"}` |
