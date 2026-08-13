@@ -3,7 +3,7 @@ import multer from "multer";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import db from "./db.js";
-import { getOrCreateAgent, resolveAgent, listAgents, agentExists, renameAgent, loginAgent } from "./agent-utils.js";
+import { getOrCreateAgent, resolveAgent, listAgents, agentExists, renameAgent, loginAgent, isAdmin } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 import { splitParagraphs, buildToc, parseRange } from "./book-utils.js";
@@ -305,9 +305,9 @@ app.patch("/api/agents/:id/name", (req, res) => {
   if (!agent) return res.status(404).json({ error: "Agent 不存在" });
   const caller = resolveAgent(req);
   if (!caller) return res.status(400).json({ error: "需要操作者身份" });
-  // 权限：只能改自己的名字
-  if (caller.id !== agent.id)
-    return res.status(403).json({ error: "只能修改自己的身份名" });
+  // 权限：管理员可改任意，否则只能改自己
+  if (caller.id !== agent.id && !isAdmin(caller))
+    return res.status(403).json({ error: "只能修改自己的身份名（管理员除外）" });
   const result = renameAgent(agent.id, name);
   if (result.error) return res.status(409).json({ error: result.error });
   res.json(result);
@@ -337,9 +337,9 @@ app.delete("/api/agents/:id", (req, res) => {
   if (!agent) return res.status(404).json({ error: "Agent 不存在" });
   const caller = resolveAgent(req);
   if (!caller) return res.status(400).json({ error: "需要 agent 身份" });
-  // 权限：只能删除自己的身份（防止任意 Agent 删别人并清空其内容）
-  if (caller.id !== agent.id)
-    return res.status(403).json({ error: "只能删除自己的身份" });
+  // 权限：管理员可删任意，否则只能删自己
+  if (caller.id !== agent.id && !isAdmin(caller))
+    return res.status(403).json({ error: "只能删除自己的身份（管理员除外）" });
 
   // 级联清理该 agent 的所有内容（先删关联行，再删身份）
   const id = agent.id;

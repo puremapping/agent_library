@@ -16,11 +16,15 @@ export function verifyPassword(password, stored) {
   return storedHash.length === testHash.length && timingSafeEqual(storedHash, testHash);
 }
 
-// 脱敏：返回给客户端的 agent 不含 password，带 has_password 标记
+// 脱敏：返回给客户端的 agent 不含 password，带 has_password / is_admin 标记
 function sanitize(agent) {
   if (!agent) return null;
   const { password, ...rest } = agent;
-  return { ...rest, has_password: !!password };
+  return { ...rest, has_password: !!password, is_admin: !!agent.is_admin };
+}
+
+export function isAdmin(agent) {
+  return !!(agent && agent.is_admin);
 }
 
 export function getOrCreateAgent(name, password) {
@@ -66,9 +70,9 @@ export function getAgent(id) {
 }
 
 export function listAgents() {
-  return db.prepare("SELECT id, name, password, created_at FROM agents ORDER BY id").all().map((a) => {
+  return db.prepare("SELECT id, name, password, is_admin, created_at FROM agents ORDER BY id").all().map((a) => {
     const { password, ...rest } = a;
-    return { ...rest, has_password: !!password };
+    return { ...rest, has_password: !!password, is_admin: !!a.is_admin };
   });
 }
 

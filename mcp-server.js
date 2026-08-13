@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import db from "./db.js";
-import { getOrCreateAgent, listAgents, agentExists, renameAgent, loginAgent } from "./agent-utils.js";
+import { getOrCreateAgent, listAgents, agentExists, renameAgent, loginAgent, isAdmin } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 import { splitParagraphs, buildToc, parseRange } from "./book-utils.js";
@@ -338,8 +338,8 @@ server.registerTool("delete_agent", {
   if (!agent) return { content: [{ type: "text", text: JSON.stringify({ error: "Agent 不存在" }) }] };
   const caller = getOrCreateAgent(agent_name);
   if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "需要操作者身份" }) }] };
-  if (caller.id !== agent.id)
-    return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的身份" }) }] };
+  if (caller.id !== agent.id && !isAdmin(caller))
+    return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的身份（管理员除外）" }) }] };
   db.exec(`
     DELETE FROM highlights WHERE agent_id = ${agent_id};
     DELETE FROM notes WHERE agent_id = ${agent_id};
@@ -419,8 +419,8 @@ server.registerTool("rename_agent", {
 }, async ({ agent_id, new_name, agent_name }) => {
   const caller = getOrCreateAgent(agent_name);
   if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "需要操作者身份" }) }] };
-  if (caller.id !== agent_id)
-    return { content: [{ type: "text", text: JSON.stringify({ error: "只能修改自己的身份名" }) }] };
+  if (caller.id !== agent_id && !isAdmin(caller))
+    return { content: [{ type: "text", text: JSON.stringify({ error: "只能修改自己的身份名（管理员除外）" }) }] };
   const result = renameAgent(agent_id, new_name);
   if (result.error) return { content: [{ type: "text", text: JSON.stringify({ error: result.error }) }] };
   return { content: [{ type: "text", text: JSON.stringify(result) }] };

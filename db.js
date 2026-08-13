@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS agents (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   name        TEXT NOT NULL UNIQUE,
   password    TEXT,
+  is_admin    INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -179,5 +180,22 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_book_agent
     ON progress (book_id, COALESCE(agent_id, 0));
 `);
+
+// agents.is_admin 迁移 + 管理员标记
+// 环境变量 AGENT_LIBRARY_ADMIN：逗号分隔的管理员身份名列表，启动时自动标记为 is_admin=1
+ensureColumn("agents", "is_admin", "INTEGER NOT NULL DEFAULT 0");
+{
+  const adminNames = (process.env.AGENT_LIBRARY_ADMIN || "")
+    .split(",").map((s) => s.trim()).filter(Boolean);
+  for (const name of adminNames) {
+    const existing = db.prepare("SELECT id FROM agents WHERE name = ?").get(name);
+    if (existing) {
+      db.prepare("UPDATE agents SET is_admin = 1 WHERE id = ?").run(existing.id);
+    } else {
+      db.prepare("INSERT INTO agents (name, is_admin) VALUES (?, 1)").run(name);
+    }
+  }
+  if (adminNames.length) console.log(`管理员已标记: ${adminNames.join(", ")}`);
+}
 
 export default db;

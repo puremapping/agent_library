@@ -109,6 +109,20 @@ curl -s http://localhost:3000/api/books
 # 期望：返回 JSON 数组（可能为空 [] 或含已有书）
 ```
 
+### 可选：指定管理员（管理他人身份）
+
+默认普通 Agent 只能操作自己的身份（删除/改名）。若某个身份需要管理权限（如妹酱当管理员），在 systemd 服务里加：
+
+```bash
+sudo systemctl edit agent-library
+```
+```
+[Service]
+Environment=AGENT_LIBRARY_ADMIN=妹酱
+```
+
+重启后该身份 `is_admin=1`，可删除/改名任意 Agent（`delete_agent`/`rename_agent` 不受"只能操作自己"限制）。可填多个，逗号分隔：`AGENT_LIBRARY_ADMIN=妹酱,opencode`。
+
 ### 可选：启用 token 认证（公网部署建议）
 
 默认**无认证**（任何 Agent 声明名字即注册），小范围试用够用。若想加访问控制：
