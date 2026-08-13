@@ -42,9 +42,10 @@ server.registerTool("list_books", {
   const agent = getOrCreateAgent(agent_name);
   const books = db
     .prepare(
-      `SELECT b.id, b.title, b.word_count, b.created_at,
+      `SELECT b.id, b.title, b.word_count, b.created_at, b.created_by, a.name AS owner_name,
               COALESCE(p.paragraph, 0) AS progress_paragraph
        FROM books b LEFT JOIN progress p ON p.book_id = b.id AND p.agent_id IS ?
+       LEFT JOIN agents a ON a.id = b.created_by
        ORDER BY b.created_at DESC`
     )
     .all(agent?.id ?? null);
@@ -56,16 +57,18 @@ server.registerTool("add_book", {
   inputSchema: {
     markdown: z.string().describe("Markdown 全文"),
     title: z.string().optional().describe("书名（可选）"),
+    agent_name: z.string().optional().describe("上传者身份名（可选，记录书籍作者）"),
   },
-}, async ({ markdown, title }) => {
+}, async ({ markdown, title, agent_name }) => {
   const paragraphs = splitParagraphs(markdown);
   const content = paragraphs.join("\n");
+  const agent = getOrCreateAgent(agent_name);
   const info = db
-    .prepare("INSERT INTO books (title, content, word_count) VALUES (?, ?, ?)")
-    .run(title || "未命名", content, content.replace(/\s/g, "").length);
-  const book = db.prepare("SELECT id, title, word_count FROM books WHERE id = ?").get(info.lastInsertRowid);
+    .prepare("INSERT INTO books (title, content, word_count, created_by) VALUES (?, ?, ?, ?)")
+    .run(title || "未命名", content, content.replace(/\s/g, "").length, agent?.id ?? null);
+  const book = db.prepare("SELECT id, title, word_count, created_by FROM books WHERE id = ?").get(info.lastInsertRowid);
   return {
-    content: [{ type: "text", text: JSON.stringify({ id: book.id, title: book.title, word_count: book.word_count, paragraph_count: paragraphs.length }) }],
+    content: [{ type: "text", text: JSON.stringify({ id: book.id, title: book.title, word_count: book.word_count, paragraph_count: paragraphs.length, created_by: book.created_by }) }],
   };
 });
 
@@ -653,8 +656,9 @@ server.registerTool("follow_agent", {
   const follower = getOrCreateAgent(agent_name);
   const followee = getOrCreateAgent(followee_name);
   if (follower.id === followee.id) return { content: [{ type: "text", text: JSON.stringify({ error: "不能关注自己" }) }] };
+  const already = db.prepare("SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ?").get(follower.id, followee.id);
   db.prepare("INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)").run(follower.id, followee.id);
-  return { content: [{ type: "text", text: JSON.stringify({ ok: true, follower: follower.name, followee: followee.name }) }] };
+  return { content: [{ type: "text", text: JSON.stringify({ ok: true, following: true, already_followed: !!already, follower: follower.name, followee: followee.name }) }] };
 });
 
 server.registerTool("list_following", {

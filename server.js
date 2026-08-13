@@ -68,21 +68,23 @@ app.post("/api/books", upload.single("file"), (req, res) => {
   const paragraphs = splitParagraphs(content);
   content = paragraphs.join("\n");
 
+  const agent = resolveAgent(req);
   const info = db
-    .prepare("INSERT INTO books (title, content, word_count) VALUES (?, ?, ?)")
-    .run(title, content, content.replace(/\s/g, "").length);
+    .prepare("INSERT INTO books (title, content, word_count, created_by) VALUES (?, ?, ?, ?)")
+    .run(title, content, content.replace(/\s/g, "").length, agent?.id ?? null);
 
-  res.status(201).json({ id: info.lastInsertRowid, title, word_count: content.replace(/\s/g, "").length });
+  res.status(201).json({ id: info.lastInsertRowid, title, word_count: content.replace(/\s/g, "").length, created_by: agent?.id ?? null });
 });
 
 app.get("/api/books", (req, res) => {
   const agent = resolveAgent(req);
   const books = db
     .prepare(
-      `SELECT b.id, b.title, b.word_count, b.created_at,
+      `SELECT b.id, b.title, b.word_count, b.created_at, b.created_by, a.name AS owner_name,
               COALESCE(p.paragraph, 0) AS progress_paragraph
        FROM books b
        LEFT JOIN progress p ON p.book_id = b.id AND p.agent_id IS ?
+       LEFT JOIN agents a ON a.id = b.created_by
        ORDER BY b.created_at DESC`
     )
     .all(agent?.id ?? null);
@@ -108,10 +110,15 @@ app.get("/api/books/:id", (req, res) => {
   const sliceHighlights = partial ? highlights.filter(inRange) : highlights;
   const sliceNotes = partial ? notes.filter(inRange) : notes;
 
+  const sliceParagraphs = paragraphs.slice(from, to);
+  // with_index=true 时返回带行号的段落数组，避免 Agent 自己数偏移
+  const withIndex = req.query.with_index === "true" || req.query.with_index === "1";
+
   res.json({
     ...book,
     untrusted: true,
-    content: paragraphs.slice(from, to).join("\n"),
+    content: withIndex ? undefined : sliceParagraphs.join("\n"),
+    paragraphs: withIndex ? sliceParagraphs.map((text, i) => ({ index: from + i, text })) : undefined,
     paragraph_count: paragraphs.length,
     from,
     to,
@@ -602,8 +609,9 @@ app.post("/api/agents/:id/follow", (req, res) => {
   if (agent && agent.id === target.id) return res.status(400).json({ error: "不能关注自己" });
   if (!agent) return res.status(400).json({ error: "需要 X-Agent-Name 身份" });
 
+  const already = db.prepare("SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ?").get(agent.id, target.id);
   db.prepare("INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)").run(agent.id, target.id);
-  res.json({ ok: true });
+  res.json({ ok: true, following: true, already_followed: !!already, follower_id: agent.id, followee_id: target.id });
 });
 
 app.delete("/api/agents/:id/follow", (req, res) => {
