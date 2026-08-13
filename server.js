@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import db from "./db.js";
 import { getOrCreateAgent, resolveAgent, listAgents } from "./agent-utils.js";
+import { toggleLike, decorateLikes } from "./like-utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -80,8 +81,14 @@ app.get("/api/books/:id", (req, res) => {
   const progress = db.prepare("SELECT * FROM progress WHERE book_id = ?").get(book.id);
   const highlights = db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
   const notes = db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
+  const agent = resolveAgent(req);
 
-  res.json({ ...book, progress_paragraph: progress?.paragraph ?? 0, highlights, notes });
+  res.json({
+    ...book,
+    progress_paragraph: progress?.paragraph ?? 0,
+    highlights: decorateLikes(highlights.map(decorateAgent), "highlight", agent?.id),
+    notes: decorateLikes(notes.map(decorateAgent), "note", agent?.id),
+  });
 });
 
 app.put("/api/books/:id/progress", (req, res) => {
@@ -181,24 +188,44 @@ app.post("/api/agents", (req, res) => {
   res.status(201).json(agent);
 });
 
+app.post("/api/likes", (req, res) => {
+  const { target_type, target_id } = req.body;
+  if (!target_type || !Number.isInteger(target_id))
+    return res.status(400).json({ error: "target_type 和 target_id 必填" });
+  const agent = resolveAgent(req);
+  const result = toggleLike(target_type, target_id, agent);
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.json(result);
+});
+
+app.delete("/api/likes", (req, res) => {
+  const { target_type, target_id } = req.query;
+  if (!target_type || !Number.isInteger(Number(target_id)))
+    return res.status(400).json({ error: "target_type 和 target_id 必填" });
+  const agent = resolveAgent(req);
+  if (!agent) return res.status(400).json({ error: "需要身份" });
+  db.prepare("DELETE FROM likes WHERE target_type = ? AND target_id = ? AND agent_id = ?").run(target_type, target_id, agent.id);
+  res.json({ liked: false, like_count: db.prepare("SELECT COUNT(*) c FROM likes WHERE target_type = ? AND target_id = ?").get(target_type, target_id).c });
+});
+
 function decorateAgent(row) {
   if (!row) return row;
   const agent = row.agent_id ? db.prepare("SELECT id, name FROM agents WHERE id = ?").get(row.agent_id) : null;
   return { ...row, agent_name: agent?.name ?? null };
 }
 
-function decorateCommentTree(comments) {
+function decorateCommentTree(comments, agentId) {
   const children = new Map();
   for (const c of comments) {
     if (!children.has(c.parent_id)) children.set(c.parent_id, []);
     children.get(c.parent_id).push(c);
   }
   function build(parentId) {
-    return (children.get(parentId) || [])
-      .map((c) => ({
-        ...decorateAgent(c),
-        replies: build(c.id),
-      }));
+    const branch = (children.get(parentId) || []).map((c) => ({
+      ...decorateAgent(c),
+      replies: build(c.id),
+    }));
+    return decorateLikes(branch, "comment", agentId);
   }
   return build(null);
 }
@@ -213,7 +240,8 @@ app.get("/api/comments", (req, res) => {
   } else {
     return res.status(400).json({ error: "需要 target_type+target_id 或 book_id" });
   }
-  res.json(decorateCommentTree(rows));
+  const agent = resolveAgent(req);
+  res.json(decorateCommentTree(rows, agent?.id));
 });
 
 app.post("/api/comments", (req, res) => {
@@ -239,7 +267,8 @@ app.get("/api/books/:id/threads", (req, res) => {
     SELECT t.*, (SELECT COUNT(*) FROM thread_messages m WHERE m.thread_id = t.id) AS message_count
     FROM threads t WHERE t.book_id = ? ORDER BY t.created_at DESC
   `).all(req.params.id);
-  res.json(rows.map(decorateAgent));
+  const agent = resolveAgent(req);
+  res.json(decorateLikes(rows.map(decorateAgent), "thread", agent?.id));
 });
 
 app.post("/api/books/:id/threads", (req, res) => {
@@ -256,7 +285,11 @@ app.get("/api/threads/:id", (req, res) => {
   const thread = db.prepare("SELECT * FROM threads WHERE id = ?").get(req.params.id);
   if (!thread) return res.status(404).json({ error: "讨论串不存在" });
   const messages = db.prepare("SELECT * FROM thread_messages WHERE thread_id = ? ORDER BY created_at, id").all(thread.id);
-  res.json({ ...decorateAgent(thread), messages: messages.map(decorateAgent) });
+  const agent = resolveAgent(req);
+  res.json({
+    ...decorateLikes([decorateAgent(thread)], "thread", agent?.id)[0],
+    messages: decorateLikes(messages.map(decorateAgent), "thread_message", agent?.id),
+  });
 });
 
 app.post("/api/threads/:id/messages", (req, res) => {
@@ -274,7 +307,8 @@ app.post("/api/threads/:id/messages", (req, res) => {
 
 app.get("/api/books/:id/reviews", (req, res) => {
   const rows = db.prepare("SELECT * FROM reviews WHERE book_id = ? ORDER BY created_at DESC").all(req.params.id);
-  res.json(rows.map(decorateAgent));
+  const agent = resolveAgent(req);
+  res.json(decorateLikes(rows.map(decorateAgent), "review", agent?.id));
 });
 
 app.post("/api/books/:id/reviews", (req, res) => {

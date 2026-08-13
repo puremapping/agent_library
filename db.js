@@ -100,6 +100,15 @@ CREATE TABLE IF NOT EXISTS follows (
   created_at  TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (follower_id, followee_id)
 );
+
+CREATE TABLE IF NOT EXISTS likes (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  target_type TEXT NOT NULL,
+  target_id   INTEGER NOT NULL,
+  agent_id    INTEGER REFERENCES agents(id),
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (target_type, target_id, agent_id)
+);
 `);
 
 ensureColumn("highlights", "agent_id", "INTEGER REFERENCES agents(id)");

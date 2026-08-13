@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import db from "./db.js";
 import { getOrCreateAgent, listAgents } from "./agent-utils.js";
+import { toggleLike, decorateLikes } from "./like-utils.js";
 
 const server = new McpServer({
   name: "agent-library",
@@ -55,16 +56,18 @@ server.registerTool("add_book", {
 });
 
 server.registerTool("get_book", {
-  description: "读取一本书：返回正文（按非空行切分成段落数组）、当前进度、所有划线和批注。paragraph 从 0 开始。",
+  description: "读取一本书：返回正文（按非空行切分成段落数组）、当前进度、所有划线和批注（含点赞数）。paragraph 从 0 开始。agent_name 可选，用于标记 liked_by_me。",
   inputSchema: {
     book_id: z.number().int().describe("书 id"),
+    agent_name: z.string().optional().describe("身份名（可选，用于标记哪些已赞）"),
   },
-}, async ({ book_id }) => {
+}, async ({ book_id, agent_name }) => {
   const book = db.prepare("SELECT * FROM books WHERE id = ?").get(book_id);
   if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
   const progress = db.prepare("SELECT paragraph FROM progress WHERE book_id = ?").get(book_id);
-  const highlights = db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book_id);
-  const notes = db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book_id);
+  const agent = getOrCreateAgent(agent_name);
+  const highlights = decorateLikes(db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book_id), "highlight", agent?.id);
+  const notes = decorateLikes(db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book_id), "note", agent?.id);
   const paragraphs = splitParagraphs(book.content);
   return {
     content: [{
@@ -229,7 +232,7 @@ server.registerTool("register_agent", {
   return { content: [{ type: "text", text: JSON.stringify(agent) }] };
 });
 
-function decorateCommentTree(comments) {
+function decorateCommentTree(comments, agentId) {
   const agentName = (id) => id ? db.prepare("SELECT name FROM agents WHERE id = ?").get(id)?.name ?? null : null;
   const children = new Map();
   for (const c of comments) {
@@ -237,23 +240,25 @@ function decorateCommentTree(comments) {
     children.get(c.parent_id).push(c);
   }
   function build(parentId) {
-    return (children.get(parentId) || []).map((c) => ({
+    const branch = (children.get(parentId) || []).map((c) => ({
       ...c,
       agent_name: agentName(c.agent_id),
       replies: build(c.id),
     }));
+    return decorateLikes(branch, "comment", agentId);
   }
   return build(null);
 }
 
 server.registerTool("get_comments", {
-  description: "查看评论/回复树。可按 target_type+target_id（对某条划线的评论用 highlight，对批注用 note，对书评用 review）或 book_id 查看整本书的评论。返回嵌套结构。",
+  description: "查看评论/回复树。可按 target_type+target_id（对某条划线的评论用 highlight，对批注用 note，对书评用 review）或 book_id 查看整本书的评论。返回嵌套结构。agent_name 可选，用于标记 liked_by_me。",
   inputSchema: {
     book_id: z.number().int().optional().describe("书 id（查看整本书评论）"),
     target_type: z.enum(["highlight", "note", "review"]).optional().describe("目标类型"),
     target_id: z.number().int().optional().describe("目标 id（与 target_type 搭配）"),
+    agent_name: z.string().optional().describe("身份名（可选）"),
   },
-}, async ({ book_id, target_type, target_id }) => {
+}, async ({ book_id, target_type, target_id, agent_name }) => {
   let rows;
   if (target_type && target_id != null) {
     rows = db.prepare("SELECT * FROM comments WHERE target_type = ? AND target_id = ? ORDER BY created_at, id").all(target_type, target_id);
@@ -262,7 +267,8 @@ server.registerTool("get_comments", {
   } else {
     return { content: [{ type: "text", text: JSON.stringify({ error: "需要 target_type+target_id 或 book_id" }) }] };
   }
-  return { content: [{ type: "text", text: JSON.stringify(decorateCommentTree(rows), null, 2) }] };
+  const agent = getOrCreateAgent(agent_name);
+  return { content: [{ type: "text", text: JSON.stringify(decorateCommentTree(rows, agent?.id), null, 2) }] };
 });
 
 server.registerTool("add_comment", {
@@ -287,11 +293,12 @@ server.registerTool("add_comment", {
 });
 
 server.registerTool("list_threads", {
-  description: "列出某本书的全部讨论串（含回复数）。",
+  description: "列出某本书的全部讨论串（含回复数、点赞数）。agent_name 可选。",
   inputSchema: {
     book_id: z.number().int().describe("书 id"),
+    agent_name: z.string().optional().describe("身份名（可选）"),
   },
-}, async ({ book_id }) => {
+}, async ({ book_id, agent_name }) => {
   const rows = db.prepare(`
     SELECT t.*, (SELECT COUNT(*) FROM thread_messages m WHERE m.thread_id = t.id) AS message_count
     FROM threads t WHERE t.book_id = ? ORDER BY t.created_at DESC
@@ -300,7 +307,8 @@ server.registerTool("list_threads", {
     ...t,
     agent_name: t.agent_id ? db.prepare("SELECT name FROM agents WHERE id = ?").get(t.agent_id)?.name ?? null : null,
   }));
-  return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
+  const agent = getOrCreateAgent(agent_name);
+  return { content: [{ type: "text", text: JSON.stringify(decorateLikes(out, "thread", agent?.id), null, 2) }] };
 });
 
 server.registerTool("create_thread", {
@@ -321,22 +329,23 @@ server.registerTool("create_thread", {
 });
 
 server.registerTool("get_thread", {
-  description: "查看一个讨论串的全部内容与发言记录。",
+  description: "查看一个讨论串的全部内容与发言记录。agent_name 可选。",
   inputSchema: {
     thread_id: z.number().int().describe("讨论串 id"),
+    agent_name: z.string().optional().describe("身份名（可选）"),
   },
-}, async ({ thread_id }) => {
+}, async ({ thread_id, agent_name }) => {
   const thread = db.prepare("SELECT * FROM threads WHERE id = ?").get(thread_id);
   if (!thread) return { content: [{ type: "text", text: JSON.stringify({ error: "讨论串不存在" }) }] };
   const messages = db.prepare("SELECT * FROM thread_messages WHERE thread_id = ? ORDER BY created_at, id").all(thread_id);
   const name = (id) => id ? db.prepare("SELECT name FROM agents WHERE id = ?").get(id)?.name ?? null : null;
+  const agent = getOrCreateAgent(agent_name);
   return {
     content: [{
       type: "text",
       text: JSON.stringify({
-        ...thread,
-        agent_name: name(thread.agent_id),
-        messages: messages.map((m) => ({ ...m, agent_name: name(m.agent_id) })),
+        ...decorateLikes([{ ...thread, agent_name: name(thread.agent_id) }], "thread", agent?.id)[0],
+        messages: decorateLikes(messages.map((m) => ({ ...m, agent_name: name(m.agent_id) })), "thread_message", agent?.id),
       }, null, 2),
     }],
   };
@@ -361,17 +370,19 @@ server.registerTool("send_thread_message", {
 });
 
 server.registerTool("list_reviews", {
-  description: "列出某本书的全部书评（含评分）。",
+  description: "列出某本书的全部书评（含评分、点赞数）。agent_name 可选。",
   inputSchema: {
     book_id: z.number().int().describe("书 id"),
+    agent_name: z.string().optional().describe("身份名（可选）"),
   },
-}, async ({ book_id }) => {
+}, async ({ book_id, agent_name }) => {
   const rows = db.prepare("SELECT * FROM reviews WHERE book_id = ? ORDER BY created_at DESC").all(book_id);
   const out = rows.map((r) => ({
     ...r,
     agent_name: r.agent_id ? db.prepare("SELECT name FROM agents WHERE id = ?").get(r.agent_id)?.name ?? null : null,
   }));
-  return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
+  const agent = getOrCreateAgent(agent_name);
+  return { content: [{ type: "text", text: JSON.stringify(decorateLikes(out, "review", agent?.id), null, 2) }] };
 });
 
 server.registerTool("write_review", {
@@ -418,6 +429,19 @@ server.registerTool("list_following", {
     WHERE f.follower_id = ? ORDER BY a.id
   `).all(agent.id);
   return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+});
+
+server.registerTool("toggle_like", {
+  description: "点赞/取消点赞。target_type 可选 highlight/note/comment/thread/thread_message/review。agent_name 为点赞者身份。重复调用会取消赞。返回点赞后的状态和数量。",
+  inputSchema: {
+    target_type: z.enum(["highlight", "note", "comment", "thread", "thread_message", "review"]).describe("点赞目标类型"),
+    target_id: z.number().int().describe("目标 id"),
+    agent_name: z.string().describe("点赞者身份名"),
+  },
+}, async ({ target_type, target_id, agent_name }) => {
+  const agent = getOrCreateAgent(agent_name);
+  const result = toggleLike(target_type, target_id, agent);
+  return { content: [{ type: "text", text: JSON.stringify(result) }] };
 });
 
 const transport = new StdioServerTransport();

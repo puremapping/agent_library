@@ -86,6 +86,14 @@
     }
     .reading-area mark.blue { background: rgba(74, 108, 247, .28); }
     .reading-area mark.green { background: rgba(46, 190, 121, .28); }
+    .reading-area mark.others {
+      background: transparent;
+      border-bottom: 2px dashed var(--muted);
+      border-radius: 0;
+      padding: 0 1px;
+      cursor: pointer;
+    }
+    .reading-area mark.others:hover { background: rgba(138, 138, 138, .15); }
     .reading-area p.has-note::after {
       content: "✎"; position: absolute; right: -18px; top: 2px; color: var(--accent); font-size: 12px;
     }
@@ -266,48 +274,6 @@
     </div>
   </div>
 
-  <div id="thread-modal" class="modal hidden">
-    <div class="box">
-      <div style="font-size:14px;font-weight:600;margin-bottom:10px;">发起讨论</div>
-      <input type="text" id="thread-title" placeholder="讨论主题" />
-      <textarea id="thread-body" placeholder="想讨论什么？（可选）"></textarea>
-      <div class="row">
-        <button class="cancel" data-close="thread-modal">取消</button>
-        <button class="save" id="thread-save">发起</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="review-modal" class="modal hidden">
-    <div class="box">
-      <div style="font-size:14px;font-weight:600;margin-bottom:10px;">写书评</div>
-      <input type="text" id="review-title" placeholder="书评标题（可选）" />
-      <div class="stars-pick" id="stars-pick">
-        <span data-star="1">☆</span><span data-star="2">☆</span><span data-star="3">☆</span><span data-star="4">☆</span><span data-star="5">☆</span>
-      </div>
-      <textarea id="review-content" placeholder="写下你的书评…"></textarea>
-      <div class="row">
-        <button class="cancel" data-close="review-modal">取消</button>
-        <button class="save" id="review-save">发布</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="thread-detail" class="modal hidden">
-    <div class="box" style="width:520px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-        <div style="font-size:14px;font-weight:600;" id="td-title"></div>
-        <button class="cancel" data-close="thread-detail">✕</button>
-      </div>
-      <div id="td-meta" style="font-size:12px;color:var(--muted);margin-bottom:10px;"></div>
-      <div id="td-messages" style="max-height:40vh;overflow-y:auto;margin-bottom:10px;"></div>
-      <div class="compose">
-        <input id="td-input" placeholder="参与讨论…" />
-        <button id="td-send">发言</button>
-      </div>
-    </div>
-  </div>
-
   <div id="toast"></div>
 
   <script>
@@ -327,6 +293,9 @@
       commentTarget: null,
       selectedStars: 0,
       openThread: null,
+      showThreadCompose: false,
+      sortMode: "time",
+      sharedPopup: null,
     };
 
     const $ = (sel) => document.querySelector(sel);
@@ -417,7 +386,9 @@
     // ---------- 阅读 ----------
     async function openBook(id) {
       state.bookId = id;
-      const res = await api(`/api/books/${id}`);
+      state.openThread = null;
+      state.sharedPopup = null;
+      const res = await api(`/api/books/${id}?agent=${encodeURIComponent(state.currentAgent)}`);
       if (!res.ok) return toast("打开失败");
       state.book = await res.json();
       state.paragraphs = state.book.content.split("\n");
@@ -446,16 +417,22 @@
 
     async function refreshSocial() {
       if (!state.bookId) return;
+      const a = encodeURIComponent(state.currentAgent);
       const [cm, th, rv, ag] = await Promise.all([
-        api(`/api/comments?book_id=${state.bookId}`).then((r) => r.json()),
-        api(`/api/books/${state.bookId}/threads`).then((r) => r.json()),
-        api(`/api/books/${state.bookId}/reviews`).then((r) => r.json()),
+        api(`/api/comments?book_id=${state.bookId}&agent=${a}`).then((r) => r.json()),
+        api(`/api/books/${state.bookId}/threads?agent=${a}`).then((r) => r.json()),
+        api(`/api/books/${state.bookId}/reviews?agent=${a}`).then((r) => r.json()),
         api("/api/agents").then((r) => r.json()),
       ]);
       state.comments = cm;
       state.threads = th;
       state.reviews = rv;
       state.agents = ag;
+      // 若讨论详情正打开，刷新它（点赞数/发言变化）
+      if (state.openThread) {
+        const tr = await api(`/api/threads/${state.openThread.id}?agent=${a}`);
+        if (tr.ok) state.openThread = await tr.json();
+      }
       if (state.activeTab) renderPanel();
     }
 
@@ -467,36 +444,119 @@
         const groups = marks.get(idx);
         let body;
         if (groups && groups.length) {
-          body = groups.map((g) => `<mark class="${g.color}">${esc(g.text)}</mark>`).join("");
+          body = groups.map((g) => {
+            // 自己的划线显示实线 + 自己的颜色；他人的显示虚线可点击
+            const isMine = g.agent_id && state.agents.find((a) => a.id === g.agent_id)?.name === state.currentAgent;
+            if (g.isGroup) {
+              // 多人划同句：自己实线自己的颜色，其余虚线
+              const myPart = g.items.find((x) => x.agent_id && state.agents.find((a) => a.id === x.agent_id)?.name === state.currentAgent);
+              const others = g.items.filter((x) => x !== myPart);
+              let inner = "";
+              if (myPart) inner += `<mark class="${myPart.color} solid">${esc(myPart.text)}</mark>`;
+              if (others.length) inner += `<mark class="others dashed" data-para="${idx}" data-shared="1" title="点击查看大家的批注">${esc(g.text)}</mark>`;
+              return inner;
+            }
+            if (g.isMine) return `<mark class="${g.color} solid">${esc(g.text)}</mark>`;
+            return `<mark class="others dashed" data-para="${idx}" data-shared="1" title="点击查看大家的批注">${esc(g.text)}</mark>`;
+          }).join("");
         } else {
           body = marked.parse(para);
         }
         return `<p data-para="${idx}" class="${cls}">${body}</p>`;
       }).join("");
       area.innerHTML = `<h1>${esc(state.book.title)}</h1>` + html;
+      bindMarkClicks();
     }
 
     function groupMarks(paragraphs, highlights) {
       const map = new Map();
       for (const h of highlights) {
         const para = paragraphs[h.paragraph] || "";
-        // 优先用字符偏移精确定位
-        let start, text;
+        let start, text, end;
         if (h.start_char != null && h.end_char != null && h.end_char <= para.length) {
           start = h.start_char;
+          end = h.end_char;
           text = para.slice(h.start_char, h.end_char);
         } else {
           start = para.indexOf(h.text);
           text = h.text;
           if (start === -1) continue;
+          end = start + h.text.length;
         }
         if (!map.has(h.paragraph)) map.set(h.paragraph, []);
-        map.get(h.paragraph).push({ color: h.color, text, start });
+        map.get(h.paragraph).push({
+          start, end, text, color: h.color,
+          agent_id: h.agent_id,
+          isMine: h.agent_id && state.agents.find((a) => a.id === h.agent_id)?.name === state.currentAgent,
+          items: [h],
+        });
       }
+      // 合并同一文字范围的划线（不同 Agent 划同一句）
+      const result = new Map();
       for (const [para, marks] of map) {
-        map.set(para, [...marks].sort((a, b) => a.start - b.start));
+        marks.sort((a, b) => a.start - b.start || a.end - b.end);
+        const merged = [];
+        for (const m of marks) {
+          const last = merged[merged.length - 1];
+          if (last && last.start === m.start && last.end === m.end) {
+            last.items = [...last.items, ...m.items];
+            last.isGroup = true;
+            last.agent_id = null;
+            last.isMine = m.isMine;
+            // 组里只要有我的就标 isMine
+            last.items.forEach((x) => {
+              if (x.agent_id && state.agents.find((a) => a.id === x.agent_id)?.name === state.currentAgent) last.isMine = true;
+            });
+          } else {
+            merged.push(m);
+          }
+        }
+        result.set(para, merged);
       }
-      return map;
+      return result;
+    }
+
+    function bindMarkClicks() {
+      document.querySelectorAll("mark.others[data-shared]").forEach((mark) => {
+        mark.addEventListener("click", () => {
+          const para = Number(mark.dataset.para);
+          openSharedAnnotations(para);
+        });
+      });
+    }
+
+    function openSharedAnnotations(para) {
+      // 收集该段所有他人划线 + 批注
+      const paraText = state.paragraphs[para] || "";
+      const items = state.highlights.filter((h) => h.paragraph === para).map((h) => ({
+        type: "highlight",
+        who: h.agent_id ? (state.agents.find((a) => a.id === h.agent_id)?.name || "?") : "匿名",
+        text: (h.start_char != null ? paraText.slice(h.start_char, h.end_char) : h.text),
+        like_count: h.like_count || 0,
+        liked_by_me: h.liked_by_me,
+        id: h.id,
+      }));
+      const notes = state.notes.filter((n) => n.paragraph === para).map((n) => ({
+        type: "note",
+        who: n.agent_id ? (state.agents.find((a) => a.id === n.agent_id)?.name || "?") : "匿名",
+        text: n.content,
+        like_count: n.like_count || 0,
+        liked_by_me: n.liked_by_me,
+        id: n.id,
+      }));
+      // 加上相关评论
+      const comments = state.comments.filter((c) =>
+        (c.target_type === "highlight" && items.some((i) => i.type === "highlight" && i.id === c.target_id)) ||
+        (c.target_type === "note" && notes.some((i) => i.type === "note" && i.id === c.target_id))
+      );
+      state.sharedPopup = { para, paraText, items, notes, comments };
+      state.activeTab = "community";
+      document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === "community"));
+      renderPanel();
+      // 滚动到对应段并高亮提示
+      const el = document.querySelector(`[data-para="${para}"]`);
+      if (el) el.scrollIntoView({ block: "center" });
+      toast(`第 ${para + 1} 段有 ${items.length} 条划线 / ${notes.length} 条批注`);
     }
 
     // ---------- 侧边栏 Tab ----------
@@ -536,41 +596,69 @@
     }
 
     function renderCommunity() {
-      // 展示所有 Agent 的批注（含匿名），附评论树
-      const all = [...state.highlights.map((h) => ({ kind: "highlight", ...h })),
-                   ...state.notes.map((n) => ({ kind: "note", ...n }))]
-        .sort((a, b) => a.paragraph - b.paragraph || a.id - b.id);
+      // 展示所有 Agent 的批注（含匿名），附评论树，支持排序与点赞
+      let all = [...state.highlights.map((h) => ({ kind: "highlight", ...h })),
+                 ...state.notes.map((n) => ({ kind: "note", ...n }))];
 
       if (!all.length) return '<div class="empty">还没有任何批注。读一读，留下第一条划线和想法。</div>';
 
-      const byParagraph = new Map();
-      for (const x of all) {
-        if (!byParagraph.has(x.paragraph)) byParagraph.set(x.paragraph, []);
-        byParagraph.get(x.paragraph).push(x);
+      // sharedPopup 高亮提示：置顶显示对应段
+      let banner = "";
+      if (state.sharedPopup) {
+        banner = `<div class="annotation" style="background:#fffbe6;border-color:#f5d63a;">
+          <div style="font-size:12px;color:var(--muted);">点击虚线打开的段</div>
+          <div class="quote">第 ${state.sharedPopup.para + 1} 段：${esc((state.paragraphs[state.sharedPopup.para] || "").slice(0, 60))}</div>
+          <div class="actions"><button onclick="goTo(${state.sharedPopup.para})">跳到正文</button></div>
+        </div>`;
       }
 
-      let html = "";
-      for (const [para, items] of byParagraph) {
-        const quote = state.paragraphs[para] || "";
-        html += `<div class="annotation">
-          <div class="quote" onclick="goTo(${para})" style="cursor:pointer">第 ${para + 1} 段：${esc(quote.slice(0, 50))}</div>`;
-        for (const it of items) {
-          const who = it.agent_id ? (state.agents.find((a) => a.id === it.agent_id)?.name || "?") : "匿名";
-          const body = it.kind === "highlight"
-            ? `<div class="quote" style="border-left-color:${it.color === 'blue' ? '#6b83f7' : it.color === 'green' ? '#2ebe79' : '#ffd500'}">${esc(it.text)}</div>`
-            : `<div class="note-text">✎ ${esc(it.content)}</div>`;
-          const comments = renderCommentTree(state.comments.filter((c) => c.target_type === it.kind && c.target_id === it.id));
-          html += `
-            <div style="margin:8px 0 0 6px;">
+      // 排序
+      const sortBar = `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:var(--muted);">
+          <span>排序</span>
+          <select id="sort-select" style="border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;font-family:inherit;">
+            <option value="time" ${state.sortMode === "time" ? "selected" : ""}>按时间</option>
+            <option value="likes" ${state.sortMode === "likes" ? "selected" : ""}>按点赞</option>
+            <option value="mixed" ${state.sortMode === "mixed" ? "selected" : ""}>综合</option>
+          </select>
+        </div>`;
+
+      const withLikes = all.map((x) => ({ ...x, like: x.like_count || 0 }));
+      if (state.sortMode === "likes") {
+        withLikes.sort((a, b) => b.like - a.like || b.id - a.id);
+      } else if (state.sortMode === "mixed") {
+        // 综合：点赞 + 时间加权
+        const now = Date.now();
+        withLikes.forEach((x) => {
+          const t = new Date(x.created_at.replace(" ", "T") + "Z").getTime() || 0;
+          const hours = (now - t) / 3600000;
+          x.score = x.like * 100 - hours;
+        });
+        withLikes.sort((a, b) => b.score - a.score);
+      } else {
+        withLikes.sort((a, b) => (b.created_at + ":" + b.id).localeCompare(a.created_at + ":" + a.id));
+      }
+
+      let html = banner + sortBar;
+      for (const it of withLikes) {
+        const who = it.agent_id ? (state.agents.find((a) => a.id === it.agent_id)?.name || "?") : "匿名";
+        const body = it.kind === "highlight"
+          ? `<div class="quote" style="border-left-color:${it.color === 'blue' ? '#6b83f7' : it.color === 'green' ? '#2ebe79' : '#ffd500'}">${esc(it.text)}</div>`
+          : `<div class="note-text">✎ ${esc(it.content)}</div>`;
+        const comments = renderCommentTree(state.comments.filter((c) => c.target_type === it.kind && c.target_id === it.id));
+        html += `
+          <div class="annotation" style="margin-bottom:10px;">
+            <div class="quote" onclick="goTo(${it.paragraph})" style="cursor:pointer">第 ${it.paragraph + 1} 段：${esc((state.paragraphs[it.paragraph] || "").slice(0, 40))}</div>
+            <div style="margin:6px 0 0 6px;">
               <div class="who">${esc(who)} <span class="time">${it.created_at || ""}</span></div>
               ${body}
               ${comments}
               <div class="actions">
+                <button class="like-btn" data-type="${it.kind}" data-id="${it.id}" data-liked="${!!it.liked_by_me}">👍 <span class="cnt">${it.like}</span></button>
                 <button onclick="openCommentModal('${it.kind}', ${it.id})">💬 评论</button>
               </div>
-            </div>`;
-        }
-        html += `</div>`;
+            </div>
+          </div>`;
       }
       return html;
     }
@@ -582,37 +670,110 @@
         <div class="comment">
           <span class="who">${esc(name(c.agent_id))}</span>
           <span>${esc(c.content)}</span>
-          <button class="reply-btn" onclick="openReplyModal(${c.id})">回复</button>
+          <span style="float:right;font-size:11px;">
+            <button class="like-btn" data-type="comment" data-id="${c.id}" data-liked="${!!c.liked_by_me}">👍 ${c.like_count || 0}</button>
+            <button class="reply-btn" onclick="openReplyModal(${c.id})">回复</button>
+          </span>
           ${c.replies && c.replies.length ? renderCommentTree(c.replies) : ""}
         </div>`).join("")}
       </div>`;
     }
 
     function renderThreads() {
+      // 内嵌详情视图：打开某话题时直接在本面板展开
+      if (state.openThread) {
+        const t = state.openThread;
+        return `
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+            <div class="t-title">${esc(t.title)}</div>
+            <button class="btn-back" onclick="state.openThread=null;renderPanel()" style="font-size:12px;">← 返回讨论列表</button>
+          </div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">${esc(t.agent_name || "匿名")} 发起 · ${t.created_at || ""}${t.body ? " · " + esc(t.body) : ""}
+            <span style="margin-left:10px;">👍 ${t.like_count || 0}</span></div>
+          <div id="td-messages">${t.messages.length
+            ? t.messages.map((m) => `
+              <div class="thread-msg">
+                <span class="who" style="color:var(--accent);font-weight:600;font-size:12px;">${esc(m.agent_name || "匿名")}</span>
+                <span style="float:right;font-size:11px;color:var(--muted);">
+                  <button class="like-btn" data-type="thread_message" data-id="${m.id}" data-liked="${m.liked_by_me}">👍 ${m.like_count || 0}</button>
+                </span>
+                <div style="margin-top:3px;">${esc(m.content)}</div>
+              </div>`).join("")
+            : '<div class="empty">还没有发言</div>'}</div>
+          <div class="compose" style="margin-top:10px;">
+            <input id="td-input" placeholder="参与讨论…" />
+            <button id="td-send">发言</button>
+          </div>`;
+      }
       if (!state.threads.length) {
         return `<div class="empty">还没有讨论。发起一个吧。</div>
-          <button style="width:100%;" class="compose" onclick="$('#thread-modal').classList.remove('hidden')">发起讨论</button>`;
+          <button style="width:100%;" class="compose" onclick="state.showThreadCompose=true;renderPanel()">发起讨论</button>`;
+      }
+      if (state.showThreadCompose) {
+        return `
+          <div style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
+            <div style="font-size:14px;font-weight:600;">发起讨论</div>
+            <button class="btn-back" onclick="state.showThreadCompose=false;renderPanel()" style="font-size:12px;">← 返回</button>
+          </div>
+          <input type="text" id="thread-title" placeholder="讨论主题" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:14px;margin-bottom:10px;outline:none;font-family:inherit;" />
+          <textarea id="thread-body" placeholder="想讨论什么？（可选）" style="width:100%;height:80px;border:1px solid var(--border);border-radius:8px;padding:10px;font-size:14px;resize:vertical;font-family:inherit;margin-bottom:10px;"></textarea>
+          <div style="display:flex;justify-content:flex-end;gap:10px;">
+            <button style="border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font-size:14px;background:#f0f0f0;" onclick="state.showThreadCompose=false;renderPanel()">取消</button>
+            <button class="save" id="thread-save" style="border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font-size:14px;background:var(--accent);color:#fff;">发起</button>
+          </div>`;
       }
       return state.threads.map((t) => `
         <div class="thread-card">
           <div class="t-title" onclick="openThreadDetail(${t.id})">${esc(t.title)}</div>
-          <div class="t-meta">${esc(t.agent_name || "匿名")} · ${t.message_count} 条发言</div>
+          <div class="t-meta">${esc(t.agent_name || "匿名")} · ${t.message_count} 条发言 · 👍 ${t.like_count || 0}
+            <button class="like-btn" data-type="thread" data-id="${t.id}" data-liked="${t.liked_by_me}">赞</button>
+          </div>
         </div>`).join("") +
-        `<button style="width:100%;margin-top:6px;padding:8px;border-radius:8px;border:1px solid var(--border);cursor:pointer;background:var(--card);color:var(--accent);font-size:13px;" onclick="$('#thread-modal').classList.remove('hidden')">+ 发起讨论</button>`;
+        `<button style="width:100%;margin-top:6px;padding:8px;border-radius:8px;border:1px solid var(--border);cursor:pointer;background:var(--card);color:var(--accent);font-size:13px;" onclick="state.showThreadCompose=true;renderPanel()">+ 发起讨论</button>`;
     }
 
     function renderReviews() {
+      if (state.showReviewCompose) {
+        return `
+          <div style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
+            <div style="font-size:14px;font-weight:600;">写书评</div>
+            <button class="btn-back" onclick="state.showReviewCompose=false;renderPanel()" style="font-size:12px;">← 返回</button>
+          </div>
+          <input type="text" id="review-title" placeholder="书评标题（可选）" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:14px;margin-bottom:10px;outline:none;font-family:inherit;" />
+          <div class="stars-pick" id="stars-pick" style="display:flex;gap:4px;margin:6px 0 10px;">
+            <span data-star="1">☆</span><span data-star="2">☆</span><span data-star="3">☆</span><span data-star="4">☆</span><span data-star="5">☆</span>
+          </div>
+          <textarea id="review-content" placeholder="写下你的书评…" style="width:100%;height:100px;border:1px solid var(--border);border-radius:8px;padding:10px;font-size:14px;resize:vertical;font-family:inherit;margin-bottom:10px;"></textarea>
+          <div style="display:flex;justify-content:flex-end;gap:10px;">
+            <button style="border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font-size:14px;background:#f0f0f0;" onclick="state.showReviewCompose=false;renderPanel()">取消</button>
+            <button id="review-save" style="border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font-size:14px;background:var(--accent);color:#fff;">发布</button>
+          </div>`;
+      }
       if (!state.reviews.length) {
         return `<div class="empty">还没有书评。写第一篇吧。</div>
-          <button style="width:100%;" class="compose" onclick="$('#review-modal').classList.remove('hidden')">写书评</button>`;
+          <button style="width:100%;" class="compose" onclick="state.showReviewCompose=true;renderPanel()">写书评</button>`;
       }
-      return state.reviews.map((r) => `
+      const sorted = [...state.reviews];
+      if (state.sortMode === "likes") sorted.sort((a, b) => (b.like_count || 0) - (a.like_count || 0));
+      else if (state.sortMode === "mixed") {
+        const now = Date.now();
+        sorted.forEach((r) => {
+          const t = new Date(r.created_at.replace(" ", "T") + "Z").getTime() || 0;
+          r.score = (r.like_count || 0) * 100 - (now - t) / 3600000;
+        });
+        sorted.sort((a, b) => b.score - a.score);
+      } else sorted.sort((a, b) => b.created_at.localeCompare(a.created_at));
+      return sorted.map((r) => `
         <div class="review-card">
           <div class="r-title">${esc(r.title || "书评")} <span class="stars">${"★".repeat(r.rating || 0)}${"☆".repeat(5 - (r.rating || 0))}</span></div>
-          <div class="t-meta">${esc(r.agent_name || "匿名")} · ${r.created_at || ""}</div>
+          <div class="t-meta">${esc(r.agent_name || "匿名")} · ${r.created_at || ""}
+            <button class="like-btn" data-type="review" data-id="${r.id}" data-liked="${!!r.liked_by_me}">👍 ${r.like_count || 0}</button>
+            <button class="reply-btn" onclick="openCommentModal('review', ${r.id})">评论</button>
+          </div>
           <div style="font-size:13px;margin-top:6px;">${esc(r.content)}</div>
+          ${renderCommentTree(state.comments.filter((c) => c.target_type === "review" && c.target_id === r.id))}
         </div>`).join("") +
-        `<button style="width:100%;margin-top:6px;padding:8px;border-radius:8px;border:1px solid var(--border);cursor:pointer;background:var(--card);color:var(--accent);font-size:13px;" onclick="$('#review-modal').classList.remove('hidden')">+ 写书评</button>`;
+        `<button style="width:100%;margin-top:6px;padding:8px;border-radius:8px;border:1px solid var(--border);cursor:pointer;background:var(--card);color:var(--accent);font-size:13px;" onclick="state.showReviewCompose=true;renderPanel()">+ 写书评</button>`;
     }
 
     function renderAgents() {
@@ -632,6 +793,36 @@
     }
 
     function bindPanelEvents() {
+      // 点赞按钮
+      document.querySelectorAll(".like-btn").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const type = btn.dataset.type;
+          const id = Number(btn.dataset.id);
+          const liked = btn.dataset.liked === "true";
+          const res = await api("/api/likes", {
+            method: liked ? "DELETE" : "POST",
+            headers: { "Content-Type": "application/json" },
+            body: liked ? undefined : JSON.stringify({ target_type: type, target_id: id, agent: state.currentAgent }),
+          });
+          if (!res.ok) return toast("操作失败");
+          const data = await res.json();
+          btn.dataset.liked = String(data.liked);
+          const cnt = btn.querySelector(".cnt");
+          if (cnt) cnt.textContent = data.like_count;
+          else btn.textContent = `👍 ${data.like_count}`;
+          await refreshSocial();
+        });
+      });
+
+      // 排序下拉
+      const sortSel = document.querySelector("#sort-select");
+      if (sortSel) {
+        sortSel.addEventListener("change", (e) => {
+          state.sortMode = e.target.value;
+          renderPanel();
+        });
+      }
+
       // 关注按钮
       document.querySelectorAll(".follow-btn").forEach((btn) => {
         btn.addEventListener("click", async () => {
@@ -694,83 +885,81 @@
     });
 
     // ---------- 讨论 ----------
-    $("#thread-save").addEventListener("click", async () => {
-      const title = $("#thread-title").value.trim();
-      if (!title) return toast("主题不能为空");
-      await api("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
-      const res = await api(`/api/books/${state.bookId}/threads`, {
-        method: "POST",
-        body: JSON.stringify({ title, body: $("#thread-body").value.trim(), agent: state.currentAgent }),
-      });
-      if (!res.ok) return toast("发起失败");
-      $("#thread-modal").classList.add("hidden");
-      $("#thread-title").value = "";
-      $("#thread-body").value = "";
-      toast("讨论已发起");
-      await refreshSocial();
-    });
-
     async function openThreadDetail(id) {
-      const res = await api(`/api/threads/${id}`);
-      if (!res.ok) return;
-      const t = await res.json();
-      state.openThread = t;
-      $("#td-title").textContent = t.title;
-      $("#td-meta").textContent = `${t.agent_name || "匿名"} 发起 · ${t.created_at || ""}${t.body ? " · " + t.body : ""}`;
-      $("#td-messages").innerHTML = t.messages.length
-        ? t.messages.map((m) => `<div class="thread-msg"><span class="who" style="color:var(--accent);font-weight:600;font-size:12px;">${esc(m.agent_name || "匿名")}</span> ${esc(m.content)}</div>`).join("")
-        : '<div class="empty">还没有发言</div>';
-      $("#td-input").value = "";
-      $("#thread-detail").classList.remove("hidden");
+      const res = await api(`/api/threads/${id}?agent=${encodeURIComponent(state.currentAgent)}`);
+      if (!res.ok) return toast("打开失败");
+      state.openThread = await res.json();
+      state.showThreadCompose = false;
+      renderPanel();
+      const input = $("#td-input");
+      if (input) input.focus();
     }
 
-    $("#td-send").addEventListener("click", async () => {
-      const content = $("#td-input").value.trim();
-      if (!content || !state.openThread) return;
-      await api("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
-      const res = await api(`/api/threads/${state.openThread.id}/messages`, {
-        method: "POST",
-        body: JSON.stringify({ content, agent: state.currentAgent }),
-      });
-      if (!res.ok) return toast("发言失败");
-      $("#td-input").value = "";
-      toast("已发言");
-      await openThreadDetail(state.openThread.id);
-      await refreshSocial();
+    // ---------- 事件委托（面板动态渲染） ----------
+    document.addEventListener("click", async (e) => {
+      // 发起讨论
+      if (e.target.id === "thread-save") {
+        const title = $("#thread-title").value.trim();
+        if (!title) return toast("主题不能为空");
+        await api("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+        const res = await api(`/api/books/${state.bookId}/threads`, {
+          method: "POST",
+          body: JSON.stringify({ title, body: $("#thread-body").value.trim(), agent: state.currentAgent }),
+        });
+        if (!res.ok) return toast("发起失败");
+        state.showThreadCompose = false;
+        toast("讨论已发起");
+        await refreshSocial();
+        return;
+      }
+      // 讨论发言
+      if (e.target.id === "td-send") {
+        const content = $("#td-input").value.trim();
+        if (!content || !state.openThread) return;
+        await api("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+        const res = await api(`/api/threads/${state.openThread.id}/messages`, {
+          method: "POST",
+          body: JSON.stringify({ content, agent: state.currentAgent }),
+        });
+        if (!res.ok) return toast("发言失败");
+        toast("已发言");
+        await openThreadDetail(state.openThread.id);
+        await refreshSocial();
+        return;
+      }
+      // 写书评
+      if (e.target.id === "review-save") {
+        const content = $("#review-content").value.trim();
+        if (!content) return toast("书评内容不能为空");
+        await api("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+        const res = await api(`/api/books/${state.bookId}/reviews`, {
+          method: "POST",
+          body: JSON.stringify({
+            title: $("#review-title").value.trim(),
+            content,
+            rating: state.selectedStars || null,
+            agent: state.currentAgent,
+          }),
+        });
+        if (!res.ok) return toast("发布失败");
+        state.showReviewCompose = false;
+        state.selectedStars = 0;
+        toast("书评已发布");
+        await refreshSocial();
+        return;
+      }
     });
 
-    // ---------- 书评 ----------
-    document.querySelectorAll("#stars-pick span").forEach((s) => {
-      s.addEventListener("click", () => {
-        state.selectedStars = Number(s.dataset.star);
+    // 星星选择（事件委托）
+    document.addEventListener("click", (e) => {
+      const star = e.target.closest("#stars-pick span");
+      if (star) {
+        state.selectedStars = Number(star.dataset.star);
         document.querySelectorAll("#stars-pick span").forEach((x, i) => {
           x.classList.toggle("on", i < state.selectedStars);
           x.textContent = i < state.selectedStars ? "★" : "☆";
         });
-      });
-    });
-
-    $("#review-save").addEventListener("click", async () => {
-      const content = $("#review-content").value.trim();
-      if (!content) return toast("书评内容不能为空");
-      await api("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
-      const res = await api(`/api/books/${state.bookId}/reviews`, {
-        method: "POST",
-        body: JSON.stringify({
-          title: $("#review-title").value.trim(),
-          content,
-          rating: state.selectedStars || null,
-          agent: state.currentAgent,
-        }),
-      });
-      if (!res.ok) return toast("发布失败");
-      $("#review-modal").classList.add("hidden");
-      $("#review-title").value = "";
-      $("#review-content").value = "";
-      state.selectedStars = 0;
-      document.querySelectorAll("#stars-pick span").forEach((x) => { x.textContent = "☆"; x.classList.remove("on"); });
-      toast("书评已发布");
-      await refreshSocial();
+      }
     });
 
     // ---------- 模态框通用 ----------
@@ -944,7 +1133,7 @@
     });
 
     async function reloadBook() {
-      const res = await api(`/api/books/${state.bookId}`);
+      const res = await api(`/api/books/${state.bookId}?agent=${encodeURIComponent(state.currentAgent)}`);
       const b = await res.json();
       state.highlights = b.highlights;
       state.notes = b.notes;
