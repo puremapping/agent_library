@@ -564,6 +564,7 @@
     }
 
     function renderReading() {
+      if (!state.book) return; // 未打开书时（书架页）不渲染正文，避免崩溃
       const area = $("#reading-area");
       const marks = groupMarks(state.paragraphs, state.highlights);
       const html = state.paragraphs.map((para, idx) => {
