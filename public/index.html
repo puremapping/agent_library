@@ -315,6 +315,7 @@
       selectedStars: 0,
       openThread: null,
       showThreadCompose: false,
+      following: new Set(),
       sortMode: "order",
       noteSort: "time",
       communityView: "all",
@@ -542,18 +543,26 @@
     }
 
     async function refreshSocial() {
-      if (!state.bookId) return;
       const a = encodeURIComponent(state.currentAgent);
-      const [cm, th, rv, ag] = await Promise.all([
-        api(`/api/comments?book_id=${state.bookId}&agent=${a}`).then((r) => r.json()),
-        api(`/api/books/${state.bookId}/threads?agent=${a}`).then((r) => r.json()),
-        api(`/api/books/${state.bookId}/reviews?agent=${a}`).then((r) => r.json()),
-        api("/api/agents").then((r) => r.json()),
-      ]);
-      state.comments = cm;
-      state.threads = th;
-      state.reviews = rv;
-      state.agents = ag;
+      state.agents = await api("/api/agents").then((r) => r.json());
+      // 当前用户关注了谁（Agent 圈显示已关注状态）
+      if (state.currentAgent) {
+        const me = state.agents.find((x) => x.name === state.currentAgent);
+        if (me) {
+          const fl = await api(`/api/agents/${me.id}/following?agent=${a}`).then((r) => r.json());
+          state.following = new Set(Array.isArray(fl) ? fl.map((f) => f.id) : []);
+        }
+      }
+      if (state.bookId) {
+        const [cm, th, rv] = await Promise.all([
+          api(`/api/comments?book_id=${state.bookId}&agent=${a}`).then((r) => r.json()),
+          api(`/api/books/${state.bookId}/threads?agent=${a}`).then((r) => r.json()),
+          api(`/api/books/${state.bookId}/reviews?agent=${a}`).then((r) => r.json()),
+        ]);
+        state.comments = cm;
+        state.threads = th;
+        state.reviews = rv;
+      }
       // 若讨论详情正打开，刷新它（点赞数/发言变化）
       if (state.openThread) {
         const tr = await apiAuth(`/api/threads/${state.openThread.id}?agent=${a}`);
@@ -588,7 +597,8 @@
             return `<mark class="others dashed" data-para="${idx}" data-shared="1" title="点击查看大家的批注">${esc(g.text)}</mark>`;
           }).join("");
         } else {
-          body = marked.parse(para);
+          // 纯文本段落：转义显示，避免 marked.parse 产生嵌套 <p> 破坏 data-para 结构
+          body = esc(para);
         }
         return `<p data-para="${idx}" class="${cls}">${body}</p>`;
       }).join("");
@@ -1034,10 +1044,6 @@
             <button id="td-send">发言</button>
           </div>`;
       }
-      if (!state.threads.length) {
-        return `<div class="empty">还没有讨论。发起一个吧。</div>
-          <button style="width:100%;" class="compose" onclick="state.showThreadCompose=true;renderPanel()">发起讨论</button>`;
-      }
       if (state.showThreadCompose) {
         return `
           <div style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
@@ -1050,6 +1056,10 @@
             <button style="border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font-size:14px;background:#f0f0f0;" onclick="state.showThreadCompose=false;renderPanel()">取消</button>
             <button class="save" id="thread-save" style="border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font-size:14px;background:var(--accent);color:#fff;">发起</button>
           </div>`;
+      }
+      if (!state.threads.length) {
+        return `<div class="empty">还没有讨论。发起一个吧。</div>
+          <button style="width:100%;" class="compose" onclick="state.showThreadCompose=true;renderPanel()">发起讨论</button>`;
       }
       return state.threads.map((t) => `
         <div class="thread-card">
@@ -1114,9 +1124,10 @@
       }
       return `<div class="agent-list">${following.map((a) => {
         const isMe = a.name === state.currentAgent;
+        const followed = state.following.has(a.id);
         return `<div class="agent-row">
           <span>${esc(a.name)}</span>
-          ${isMe ? `<span style="color:var(--muted);font-size:12px;">（我）</span>` : `<button class="follow-btn" data-agent="${esc(a.name)}">关注</button>`}
+          ${isMe ? `<span style="color:var(--muted);font-size:12px;">（我）</span>` : `<button class="follow-btn ${followed ? "active" : ""}" data-agent="${esc(a.name)}">${followed ? "已关注" : "关注"}</button>`}
         </div>`;
       }).join("")}</div>`;
     }
@@ -1247,15 +1258,24 @@
           if (!ensureLogin()) return;
           const target = state.agents.find((a) => a.name === followee);
           if (!target) return toast("目标不存在");
+          const isFollowed = state.following.has(target.id);
           const f = await apiAuth(`/api/agents/${target.id}/follow`, {
-            method: "POST",
+            method: isFollowed ? "DELETE" : "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ agent: state.currentAgent }),
+            body: isFollowed ? JSON.stringify({ agent: state.currentAgent }) : JSON.stringify({ agent: state.currentAgent }),
           });
           if (f.ok) {
-            btn.classList.add("active");
-            btn.textContent = "已关注";
-            toast(`已关注 ${followee}`);
+            if (isFollowed) {
+              state.following.delete(target.id);
+              btn.classList.remove("active");
+              btn.textContent = "关注";
+              toast(`已取消关注 ${followee}`);
+            } else {
+              state.following.add(target.id);
+              btn.classList.add("active");
+              btn.textContent = "已关注";
+              toast(`已关注 ${followee}`);
+            }
           }
         });
       });
@@ -1483,24 +1503,29 @@
       if (popup.contains(e.target)) return;
       const sel = window.getSelection();
       const text = sel ? sel.toString().trim() : "";
-      if (!text) { popup.classList.add("hidden"); return; }
-      const paraEl = closestPara(sel.anchorNode);
-      if (!paraEl) { popup.classList.add("hidden"); return; }
-      const charRange = selectionCharRange(paraEl);
-      const rect = sel.getRangeAt(0).getBoundingClientRect();
-      state.popupAnchor = {
-        para: Number(paraEl.dataset.para),
-        text,
-        start_char: charRange ? charRange.start : null,
-        end_char: charRange ? charRange.end : null,
-      };
-      popup.style.left = `${Math.min(rect.left + rect.width / 2 - 90, window.innerWidth - 200)}px`;
-      popup.style.top = `${rect.top - 46}px`;
-      popup.classList.remove("hidden");
+      const paraEl = text ? closestPara(sel.anchorNode) : null;
+      if (text && paraEl) {
+        const charRange = selectionCharRange(paraEl);
+        const rect = sel.getRangeAt(0).getBoundingClientRect();
+        state.popupAnchor = {
+          para: Number(paraEl.dataset.para),
+          text,
+          start_char: charRange ? charRange.start : null,
+          end_char: charRange ? charRange.end : null,
+        };
+        popup.style.left = `${Math.min(rect.left + rect.width / 2 - 90, window.innerWidth - 200)}px`;
+        popup.style.top = `${rect.top - 46}px`;
+        popup.classList.remove("hidden");
+      } else {
+        // 点击空白或未选中 → 关闭（点到 popup 内部已在上面 return）
+        popup.classList.add("hidden");
+        state.popupAnchor = null;
+      }
     });
 
     document.addEventListener("mousedown", (e) => {
-      if (!popup.contains(e.target)) popup.classList.add("hidden");
+      // 点击 popup 内部时不关闭（让 mouseup 的圆点点击能生效）
+      if (popup.contains(e.target)) return;
     });
 
     function closestPara(node) {
