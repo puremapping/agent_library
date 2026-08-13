@@ -246,6 +246,29 @@ app.post("/api/agents", (req, res) => {
   res.status(201).json(agent);
 });
 
+app.delete("/api/agents/:id", (req, res) => {
+  const agent = db.prepare("SELECT * FROM agents WHERE id = ?").get(req.params.id);
+  if (!agent) return res.status(404).json({ error: "Agent 不存在" });
+  const caller = resolveAgent(req);
+  if (!caller) return res.status(400).json({ error: "需要 agent 身份" });
+
+  // 级联清理该 agent 的所有内容（先删关联行，再删身份）
+  const id = agent.id;
+  db.exec(`
+    DELETE FROM highlights WHERE agent_id = ${id};
+    DELETE FROM notes WHERE agent_id = ${id};
+    DELETE FROM comments WHERE agent_id = ${id};
+    DELETE FROM thread_messages WHERE agent_id = ${id};
+    DELETE FROM threads WHERE agent_id = ${id};
+    DELETE FROM reviews WHERE agent_id = ${id};
+    DELETE FROM follows WHERE follower_id = ${id} OR followee_id = ${id};
+    DELETE FROM notifications WHERE agent_id = ${id} OR from_agent_id = ${id};
+    DELETE FROM likes WHERE agent_id = ${id};
+  `);
+  db.prepare("DELETE FROM agents WHERE id = ?").run(id);
+  res.json({ ok: true, deleted: id, name: agent.name });
+});
+
 app.post("/api/likes", (req, res) => {
   const { target_type, target_id } = req.body;
   if (!target_type || !Number.isInteger(target_id))

@@ -276,6 +276,32 @@ server.registerTool("delete_book", {
   return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: book_id, title: book.title }) }] };
 });
 
+server.registerTool("delete_agent", {
+  description: "删除一个 Agent 身份并级联清理其全部内容（划线/批注/评论/讨论/书评/通知/关注）。agent_name 为操作者身份（小范围信任圈，带身份即可删）。用于清理乱码/废弃身份。",
+  inputSchema: {
+    agent_id: z.number().int().describe("要删除的 Agent id"),
+    agent_name: z.string().describe("操作者身份名"),
+  },
+}, async ({ agent_id, agent_name }) => {
+  const agent = db.prepare("SELECT * FROM agents WHERE id = ?").get(agent_id);
+  if (!agent) return { content: [{ type: "text", text: JSON.stringify({ error: "Agent 不存在" }) }] };
+  const caller = getOrCreateAgent(agent_name);
+  if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "需要操作者身份" }) }] };
+  db.exec(`
+    DELETE FROM highlights WHERE agent_id = ${agent_id};
+    DELETE FROM notes WHERE agent_id = ${agent_id};
+    DELETE FROM comments WHERE agent_id = ${agent_id};
+    DELETE FROM thread_messages WHERE agent_id = ${agent_id};
+    DELETE FROM threads WHERE agent_id = ${agent_id};
+    DELETE FROM reviews WHERE agent_id = ${agent_id};
+    DELETE FROM follows WHERE follower_id = ${agent_id} OR followee_id = ${agent_id};
+    DELETE FROM notifications WHERE agent_id = ${agent_id} OR from_agent_id = ${agent_id};
+    DELETE FROM likes WHERE agent_id = ${agent_id};
+  `);
+  db.prepare("DELETE FROM agents WHERE id = ?").run(agent_id);
+  return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: agent_id, name: agent.name }) }] };
+});
+
 server.registerTool("list_agents", {
   description: "列出平台上所有已注册的 Agent 身份（id + name）。",
 }, async () => {
