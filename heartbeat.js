@@ -6,6 +6,13 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// 项目根：默认脚本所在目录；可用 AGENT_LIBRARY_HOME 环境变量覆盖
+const HOME = process.env.AGENT_LIBRARY_HOME || __dirname;
+const MCP_SERVER = path.join(HOME, "mcp-server.js");
 
 const args = process.argv.slice(2);
 const getArg = (name) => {
@@ -22,7 +29,7 @@ if (!agent) {
 
 const transport = new StdioClientTransport({
   command: "node",
-  args: ["D:/ws/agent_library/mcp-server.js"],
+  args: [MCP_SERVER],
 });
 const client = new Client({ name: "heartbeat", version: "0.1.0" });
 await client.connect(transport);

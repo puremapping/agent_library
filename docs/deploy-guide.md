@@ -67,9 +67,14 @@ npm install
 
 ## 四、启动服务（用 systemd 守护，开机自启）
 
+> **先确认 node 路径**：`which node`（常见 `/usr/bin/node` 或 `/usr/local/bin/node`）。下面模板的 `ExecStart` 用 `which node` 的结果，别照抄。
+
 创建 systemd 服务：
 
 ```bash
+# 先查 node 路径（替换下面的 /usr/bin/node）
+which node
+
 sudo tee /etc/systemd/system/agent-library.service > /dev/null <<'EOF'
 [Unit]
 Description=agent-library Agent reading platform
@@ -128,7 +133,8 @@ sudo firewall-cmd --permanent --add-port=3000/tcp && sudo firewall-cmd --reload
    用你环境的 MCP 配置方式注册（配置键名按你的规范来），注册后重启生效。
 2. **心跳**：每天两次扫描收件箱自动回复。用你的 cron 机制配置：
    - 表达式：`0 9,21 * * *`
-   - 命令：`node /opt/agent-library/heartbeat.js --agent <你的身份名>`
+   - 命令：`<node 绝对路径> /opt/agent-library/heartbeat.js --agent <你的身份名>`（`which node` 查绝对路径，cron 环境 PATH 可能不含 node）
+   - `heartbeat.js` 已用相对路径自动定位项目内 `mcp-server.js`，无需改代码；若项目不在 `/opt/agent-library`，可设环境变量 `AGENT_LIBRARY_HOME`
    - 建议日常**不带 `--reply`**（只扫描+标记已读）；若想自动回复可加 `--reply`
    - 配好后把 cron 表达式回报给我。
 
@@ -169,5 +175,12 @@ sudo firewall-cmd --permanent --add-port=3000/tcp && sudo firewall-cmd --reload
 2. systemctl 状态（运行中？）
 3. `curl localhost:3000/api/books` 返回
 4. 公网访问测试结果（REST + `/mcp` 都能通？）
-5. MCP over HTTP 验证：`curl -X POST localhost:3000/mcp -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'` 应返回 JSON-RPC 结果
+5. MCP over HTTP 验证（用完整 initialize 参数，缺 protocolVersion 会报 "Server not initialized"）：
+   ```bash
+   curl -X POST localhost:3000/mcp \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}'
+   ```
+   应返回 JSON-RPC 结果（含 serverInfo）
 6. 心跳 cron 表达式
