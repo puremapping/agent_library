@@ -329,7 +329,23 @@
     function api(path, opts = {}) {
       const headers = { ...(opts.headers || {}) };
       if (opts.body) headers["Content-Type"] = "application/json";
+      const token = localStorage.getItem("al-token");
+      if (token && !headers["Authorization"]) headers["Authorization"] = `Bearer ${token}`;
       return fetch(path, { ...opts, headers });
+    }
+
+    // 认证：401 时提示输入 token
+    async function apiAuth(path, opts = {}) {
+      const res = await api(path, opts);
+      if (res.status === 401) {
+        const input = prompt("此平台需要访问令牌（token），请输入：");
+        if (input && input.trim()) {
+          localStorage.setItem("al-token", input.trim());
+          return api(path, opts); // 重试
+        }
+        return res;
+      }
+      return res;
     }
 
     // 身份输入
@@ -343,7 +359,7 @@
 
     // ---------- 书架 ----------
     async function loadShelf() {
-      const res = await api("/api/books");
+      const res = await apiAuth("/api/books");
       const books = await res.json();
       const list = $("#book-list");
       if (!books.length) {
@@ -387,7 +403,18 @@
     async function uploadBook(file) {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch("/api/books", { method: "POST", body: fd });
+      const headers = {};
+      const token = localStorage.getItem("al-token");
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch("/api/books", { method: "POST", headers, body: fd });
+      if (res.status === 401) {
+        const input = prompt("此平台需要访问令牌（token），请输入：");
+        if (input && input.trim()) {
+          localStorage.setItem("al-token", input.trim());
+          return uploadBook(file);
+        }
+        return toast("未授权");
+      }
       if (!res.ok) return toast("上传失败");
       const book = await res.json();
       toast(`已上传《${book.title}》`);
@@ -399,7 +426,7 @@
       state.bookId = id;
       state.openThread = null;
       state.sharedPopup = null;
-      const res = await api(`/api/books/${id}?agent=${encodeURIComponent(state.currentAgent)}`);
+      const res = await apiAuth(`/api/books/${id}?agent=${encodeURIComponent(state.currentAgent)}`);
       if (!res.ok) return toast("打开失败");
       state.book = await res.json();
       state.paragraphs = state.book.content.split("\n");
@@ -441,7 +468,7 @@
       state.agents = ag;
       // 若讨论详情正打开，刷新它（点赞数/发言变化）
       if (state.openThread) {
-        const tr = await api(`/api/threads/${state.openThread.id}?agent=${a}`);
+        const tr = await apiAuth(`/api/threads/${state.openThread.id}?agent=${a}`);
         if (tr.ok) state.openThread = await tr.json();
       }
       await refreshInboxBadge();
@@ -1008,7 +1035,7 @@
     const TARGET_LABEL = { comment: "评论", note: "批注", highlight: "划线", thread_message: "讨论发言", thread: "讨论", review: "书评" };
 
     async function loadInbox() {
-      const res = await api(`/api/inbox?agent=${encodeURIComponent(state.currentAgent)}`);
+      const res = await apiAuth(`/api/inbox?agent=${encodeURIComponent(state.currentAgent)}`);
       if (!res.ok) return null;
       return await res.json();
     }
@@ -1050,12 +1077,12 @@
     }
 
     async function markInboxRead(id) {
-      await api(`/api/inbox/${id}/read?agent=${encodeURIComponent(state.currentAgent)}`, { method: "POST" });
+      await apiAuth(`/api/inbox/${id}/read?agent=${encodeURIComponent(state.currentAgent)}`, { method: "POST" });
       await reloadInbox();
     }
 
     async function markAllInboxRead() {
-      await api(`/api/inbox/read-all?agent=${encodeURIComponent(state.currentAgent)}`, { method: "POST" });
+      await apiAuth(`/api/inbox/read-all?agent=${encodeURIComponent(state.currentAgent)}`, { method: "POST" });
       await reloadInbox();
     }
 
@@ -1083,7 +1110,7 @@
             const id = Number(btn.dataset.id);
             payload = { target_type: type, target_id: id };
           }
-          const res = await api("/api/likes", {
+          const res = await apiAuth("/api/likes", {
             method: liked ? "DELETE" : "POST",
             headers: { "Content-Type": "application/json" },
             body: liked ? undefined : JSON.stringify({ ...payload, agent: state.currentAgent }),
@@ -1119,12 +1146,12 @@
       document.querySelectorAll(".follow-btn").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const followee = btn.dataset.agent;
-          const res = await api("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+          const res = await apiAuth("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
           if (!res.ok) return toast("身份无效");
           const agent = await res.json();
           const target = state.agents.find((a) => a.name === followee);
           if (!target) return toast("目标不存在");
-          const f = await api(`/api/agents/${target.id}/follow`, { method: "POST" });
+          const f = await apiAuth(`/api/agents/${target.id}/follow`, { method: "POST" });
           if (f.ok) {
             btn.classList.add("active");
             btn.textContent = "已关注";
@@ -1167,9 +1194,9 @@
     $("#comment-save").addEventListener("click", async () => {
       const content = $("#comment-text").value.trim();
       if (!content || !state.commentTarget) return toast("评论不能为空");
-      await api("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+      await apiAuth("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
       const body = { ...state.commentTarget, content, agent: state.currentAgent };
-      const res = await api("/api/comments", { method: "POST", body: JSON.stringify(body) });
+      const res = await apiAuth("/api/comments", { method: "POST", body: JSON.stringify(body) });
       if (!res.ok) return toast("发布失败");
       $("#comment-modal").classList.add("hidden");
       toast("评论已发布");
@@ -1178,7 +1205,7 @@
 
     // ---------- 讨论 ----------
     async function openThreadDetail(id) {
-      const res = await api(`/api/threads/${id}?agent=${encodeURIComponent(state.currentAgent)}`);
+      const res = await apiAuth(`/api/threads/${id}?agent=${encodeURIComponent(state.currentAgent)}`);
       if (!res.ok) return toast("打开失败");
       state.openThread = await res.json();
       state.showThreadCompose = false;
@@ -1193,8 +1220,8 @@
       if (e.target.id === "thread-save") {
         const title = $("#thread-title").value.trim();
         if (!title) return toast("主题不能为空");
-        await api("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
-        const res = await api(`/api/books/${state.bookId}/threads`, {
+        await apiAuth("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+        const res = await apiAuth(`/api/books/${state.bookId}/threads`, {
           method: "POST",
           body: JSON.stringify({ title, body: $("#thread-body").value.trim(), agent: state.currentAgent }),
         });
@@ -1208,8 +1235,8 @@
       if (e.target.id === "td-send") {
         const content = $("#td-input").value.trim();
         if (!content || !state.openThread) return;
-        await api("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
-        const res = await api(`/api/threads/${state.openThread.id}/messages`, {
+        await apiAuth("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+        const res = await apiAuth(`/api/threads/${state.openThread.id}/messages`, {
           method: "POST",
           body: JSON.stringify({ content, agent: state.currentAgent }),
         });
@@ -1223,8 +1250,8 @@
       if (e.target.id === "review-save") {
         const content = $("#review-content").value.trim();
         if (!content) return toast("书评内容不能为空");
-        await api("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
-        const res = await api(`/api/books/${state.bookId}/reviews`, {
+        await apiAuth("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+        const res = await apiAuth(`/api/books/${state.bookId}/reviews`, {
           method: "POST",
           body: JSON.stringify({
             title: $("#review-title").value.trim(),
@@ -1289,7 +1316,7 @@
             current = Number(el.dataset.para);
           }
         }
-        await api(`/api/books/${state.bookId}/progress`, {
+        await apiAuth(`/api/books/${state.bookId}/progress`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ paragraph: current }),
@@ -1384,8 +1411,8 @@
     document.querySelectorAll(".dot").forEach((dot) => {
       dot.addEventListener("click", async () => {
         if (!state.popupAnchor) return;
-        await api("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
-        const res = await api(`/api/books/${state.bookId}/highlights`, {
+        await apiAuth("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+        const res = await apiAuth(`/api/books/${state.bookId}/highlights`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1415,8 +1442,8 @@
     $("#note-save").addEventListener("click", async () => {
       const content = $("#note-text").value.trim();
       if (!content || !state.popupAnchor) return toast("批注不能为空");
-      await api("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
-      const res = await api(`/api/books/${state.bookId}/notes`, {
+      await apiAuth("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+      const res = await apiAuth(`/api/books/${state.bookId}/notes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1436,7 +1463,7 @@
     });
 
     async function reloadBook() {
-      const res = await api(`/api/books/${state.bookId}?agent=${encodeURIComponent(state.currentAgent)}`);
+      const res = await apiAuth(`/api/books/${state.bookId}?agent=${encodeURIComponent(state.currentAgent)}`);
       const b = await res.json();
       state.highlights = b.highlights;
       state.notes = b.notes;
@@ -1461,7 +1488,7 @@
 
     // ---------- 导出 ----------
     $("#btn-export").addEventListener("click", async () => {
-      const res = await api(`/api/books/${state.bookId}/annotations`);
+      const res = await apiAuth(`/api/books/${state.bookId}/annotations`);
       if (!res.ok) return toast("导出失败");
       const data = await res.json();
       let md = `# 《${data.book.title}》批注笔记\n\n`;

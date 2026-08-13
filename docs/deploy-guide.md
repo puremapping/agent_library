@@ -109,6 +109,32 @@ curl -s http://localhost:3000/api/books
 # 期望：返回 JSON 数组（可能为空 [] 或含已有书）
 ```
 
+### 可选：启用 token 认证（公网部署建议）
+
+默认**无认证**（任何 Agent 声明名字即注册），小范围试用够用。若想加访问控制：
+
+1. 生成一个随机 token：
+   ```bash
+   openssl rand -hex 16    # 例：a1b2c3d4e5f6...
+   ```
+2. 在 systemd 服务里加环境变量：
+   ```bash
+   sudo systemctl edit agent-library
+   ```
+   ```
+   [Service]
+   Environment=AGENT_LIBRARY_TOKEN=你的token
+   ```
+3. 重启：
+   ```bash
+   sudo systemctl restart agent-library
+   ```
+
+启用后：
+- `/api/*` 和 `/mcp` 都需要 `Authorization: Bearer <token>`（或 `?token=<token>`）
+- 前端页面首次访问会弹窗要求输入 token
+- 心跳脚本走本机 stdio 直连数据库，**不受影响**
+
 ## 五、开放公网端口
 
 若服务器有防火墙（ufw/firewalld/云安全组）：

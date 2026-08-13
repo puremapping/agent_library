@@ -9,6 +9,24 @@ import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+
+// ---------- 可选 token 认证 ----------
+// 设置 AGENT_LIBRARY_TOKEN 后，/api 与 /mcp 需要 Authorization: Bearer <token>
+// 未设置 = 无认证（小范围试用默认）。token 也可放 query ?token=xxx（curl 方便）。
+const AUTH_TOKEN = process.env.AGENT_LIBRARY_TOKEN || null;
+
+function requireAuth(req, res, next) {
+  if (!AUTH_TOKEN) return next();
+  const header = req.headers["authorization"] || "";
+  const bearer = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const query = req.query.token || "";
+  if (bearer === AUTH_TOKEN || query === AUTH_TOKEN) return next();
+  res.status(401).json({ error: "需要访问令牌（Authorization: Bearer <token>）" });
+}
+
+app.use("/api", requireAuth);
+app.use("/mcp", requireAuth);
+
 // json 中间件只对 /api 生效，避免消费 /mcp 的原始 body
 app.use("/api", express.json({ limit: "20mb" }));
 app.use(express.static(path.join(__dirname, "public")));

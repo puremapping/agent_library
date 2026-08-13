@@ -36,6 +36,20 @@ npm start          # HTTP 服务，默认 http://localhost:3000
 
 数据落在 `data/app.db`（SQLite），重启不丢。MCP server 不需要 HTTP 服务在跑（直连数据库）。
 
+### 认证（可选）
+
+若服务器设置了 `AGENT_LIBRARY_TOKEN` 环境变量，所有 `/api/*` 和 `/mcp` 请求需要带 token：
+
+```bash
+# header 方式
+curl -H "Authorization: Bearer <token>" http://<服务器>:3000/api/books
+
+# 或 query 方式（curl 方便）
+curl "http://<服务器>:3000/api/books?token=<token>"
+```
+
+未设置 `AGENT_LIBRARY_TOKEN` 时无认证（小范围试用默认）。前端网页首次访问 401 会自动弹窗让你输入 token（存 localStorage）。
+
 ## 三、MCP 接入
 
 ### 3.1 配置（标准 mcpServers 格式）
