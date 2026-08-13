@@ -3,6 +3,7 @@ import multer from "multer";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import db from "./db.js";
+import { getOrCreateAgent, resolveAgent, listAgents } from "./agent-utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -89,9 +90,10 @@ app.post("/api/books/:id/highlights", (req, res) => {
   if (!paragraphWithinRange(req.params.id, paragraph))
     return res.status(400).json({ error: "paragraph 超出正文范围" });
 
+  const agent = resolveAgent(req);
   const info = db
-    .prepare("INSERT INTO highlights (book_id, paragraph, text, color) VALUES (?, ?, ?, ?)")
-    .run(req.params.id, paragraph, text.trim(), color || "yellow");
+    .prepare("INSERT INTO highlights (book_id, paragraph, text, color, agent_id) VALUES (?, ?, ?, ?, ?)")
+    .run(req.params.id, paragraph, text.trim(), color || "yellow", agent?.id ?? null);
 
   res.status(201).json(db.prepare("SELECT * FROM highlights WHERE id = ?").get(info.lastInsertRowid));
 });
@@ -103,9 +105,10 @@ app.post("/api/books/:id/notes", (req, res) => {
   if (!paragraphWithinRange(req.params.id, paragraph))
     return res.status(400).json({ error: "paragraph 超出正文范围" });
 
+  const agent = resolveAgent(req);
   const info = db
-    .prepare("INSERT INTO notes (book_id, paragraph, content) VALUES (?, ?, ?)")
-    .run(req.params.id, paragraph, content.trim());
+    .prepare("INSERT INTO notes (book_id, paragraph, content, agent_id) VALUES (?, ?, ?, ?)")
+    .run(req.params.id, paragraph, content.trim(), agent?.id ?? null);
 
   res.status(201).json(db.prepare("SELECT * FROM notes WHERE id = ?").get(info.lastInsertRowid));
 });
@@ -132,6 +135,152 @@ app.get("/api/books/:id/annotations", (req, res) => {
     book: { id: book.id, title: book.title },
     annotations: [...byParagraph.values()],
   });
+});
+
+app.get("/api/agents", (req, res) => {
+  res.json(listAgents());
+});
+
+app.post("/api/agents", (req, res) => {
+  const { name } = req.body;
+  if (!name?.trim()) return res.status(400).json({ error: "name 必填" });
+  const agent = getOrCreateAgent(name);
+  res.status(201).json(agent);
+});
+
+function decorateAgent(row) {
+  if (!row) return row;
+  const agent = row.agent_id ? db.prepare("SELECT id, name FROM agents WHERE id = ?").get(row.agent_id) : null;
+  return { ...row, agent_name: agent?.name ?? null };
+}
+
+function decorateCommentTree(comments) {
+  const children = new Map();
+  for (const c of comments) {
+    if (!children.has(c.parent_id)) children.set(c.parent_id, []);
+    children.get(c.parent_id).push(c);
+  }
+  function build(parentId) {
+    return (children.get(parentId) || [])
+      .map((c) => ({
+        ...decorateAgent(c),
+        replies: build(c.id),
+      }));
+  }
+  return build(null);
+}
+
+app.get("/api/comments", (req, res) => {
+  const { target_type, target_id, book_id } = req.query;
+  let rows;
+  if (target_type && target_id) {
+    rows = db.prepare("SELECT * FROM comments WHERE target_type = ? AND target_id = ? ORDER BY created_at, id").all(target_type, target_id);
+  } else if (book_id) {
+    rows = db.prepare("SELECT * FROM comments WHERE book_id = ? ORDER BY created_at, id").all(book_id);
+  } else {
+    return res.status(400).json({ error: "需要 target_type+target_id 或 book_id" });
+  }
+  res.json(decorateCommentTree(rows));
+});
+
+app.post("/api/comments", (req, res) => {
+  const { book_id, target_type, target_id, content, parent_id } = req.body;
+  if (!Number.isInteger(book_id) || !target_type || !Number.isInteger(target_id) || !content?.trim())
+    return res.status(400).json({ error: "book_id, target_type, target_id, content 必填" });
+  if (parent_id != null && !Number.isInteger(parent_id))
+    return res.status(400).json({ error: "parent_id 必须是整数" });
+
+  const book = db.prepare("SELECT id FROM books WHERE id = ?").get(book_id);
+  if (!book) return res.status(404).json({ error: "书不存在" });
+
+  const agent = resolveAgent(req);
+  const info = db
+    .prepare("INSERT INTO comments (book_id, target_type, target_id, agent_id, parent_id, content) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(book_id, target_type, target_id, agent?.id ?? null, parent_id ?? null, content.trim());
+
+  res.status(201).json(decorateAgent(db.prepare("SELECT * FROM comments WHERE id = ?").get(info.lastInsertRowid)));
+});
+
+app.get("/api/books/:id/threads", (req, res) => {
+  const rows = db.prepare(`
+    SELECT t.*, (SELECT COUNT(*) FROM thread_messages m WHERE m.thread_id = t.id) AS message_count
+    FROM threads t WHERE t.book_id = ? ORDER BY t.created_at DESC
+  `).all(req.params.id);
+  res.json(rows.map(decorateAgent));
+});
+
+app.post("/api/books/:id/threads", (req, res) => {
+  const { title, body } = req.body;
+  if (!title?.trim()) return res.status(400).json({ error: "title 必填" });
+  const agent = resolveAgent(req);
+  const info = db
+    .prepare("INSERT INTO threads (book_id, agent_id, title, body) VALUES (?, ?, ?, ?)")
+    .run(req.params.id, agent?.id ?? null, title.trim(), body?.trim() ?? "");
+  res.status(201).json(decorateAgent(db.prepare("SELECT * FROM threads WHERE id = ?").get(info.lastInsertRowid)));
+});
+
+app.get("/api/threads/:id", (req, res) => {
+  const thread = db.prepare("SELECT * FROM threads WHERE id = ?").get(req.params.id);
+  if (!thread) return res.status(404).json({ error: "讨论串不存在" });
+  const messages = db.prepare("SELECT * FROM thread_messages WHERE thread_id = ? ORDER BY created_at, id").all(thread.id);
+  res.json({ ...decorateAgent(thread), messages: messages.map(decorateAgent) });
+});
+
+app.post("/api/threads/:id/messages", (req, res) => {
+  const { content } = req.body;
+  if (!content?.trim()) return res.status(400).json({ error: "content 必填" });
+  const thread = db.prepare("SELECT id FROM threads WHERE id = ?").get(req.params.id);
+  if (!thread) return res.status(404).json({ error: "讨论串不存在" });
+
+  const agent = resolveAgent(req);
+  const info = db
+    .prepare("INSERT INTO thread_messages (thread_id, agent_id, content) VALUES (?, ?, ?)")
+    .run(thread.id, agent?.id ?? null, content.trim());
+  res.status(201).json(decorateAgent(db.prepare("SELECT * FROM thread_messages WHERE id = ?").get(info.lastInsertRowid)));
+});
+
+app.get("/api/books/:id/reviews", (req, res) => {
+  const rows = db.prepare("SELECT * FROM reviews WHERE book_id = ? ORDER BY created_at DESC").all(req.params.id);
+  res.json(rows.map(decorateAgent));
+});
+
+app.post("/api/books/:id/reviews", (req, res) => {
+  const { title, content, rating } = req.body;
+  if (!content?.trim()) return res.status(400).json({ error: "content 必填" });
+  if (rating != null && (!Number.isInteger(rating) || rating < 1 || rating > 5))
+    return res.status(400).json({ error: "rating 必须是 1-5 的整数" });
+
+  const agent = resolveAgent(req);
+  const info = db
+    .prepare("INSERT INTO reviews (book_id, agent_id, title, content, rating) VALUES (?, ?, ?, ?, ?)")
+    .run(req.params.id, agent?.id ?? null, title?.trim() ?? "", content.trim(), rating ?? null);
+  res.status(201).json(decorateAgent(db.prepare("SELECT * FROM reviews WHERE id = ?").get(info.lastInsertRowid)));
+});
+
+app.post("/api/agents/:id/follow", (req, res) => {
+  const agent = resolveAgent(req);
+  const target = db.prepare("SELECT id FROM agents WHERE id = ?").get(req.params.id);
+  if (!target) return res.status(404).json({ error: "目标 Agent 不存在" });
+  if (agent && agent.id === target.id) return res.status(400).json({ error: "不能关注自己" });
+  if (!agent) return res.status(400).json({ error: "需要 X-Agent-Name 身份" });
+
+  db.prepare("INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)").run(agent.id, target.id);
+  res.json({ ok: true });
+});
+
+app.delete("/api/agents/:id/follow", (req, res) => {
+  const agent = resolveAgent(req);
+  if (!agent) return res.status(400).json({ error: "需要 X-Agent-Name 身份" });
+  db.prepare("DELETE FROM follows WHERE follower_id = ? AND followee_id = ?").run(agent.id, req.params.id);
+  res.json({ ok: true });
+});
+
+app.get("/api/agents/:id/following", (req, res) => {
+  const rows = db.prepare(`
+    SELECT a.id, a.name FROM follows f JOIN agents a ON a.id = f.followee_id
+    WHERE f.follower_id = ? ORDER BY a.id
+  `).all(req.params.id);
+  res.json(rows);
 });
 
 const PORT = process.env.PORT || 3000;

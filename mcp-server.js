@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import db from "./db.js";
+import { getOrCreateAgent, listAgents } from "./agent-utils.js";
 
 const server = new McpServer({
   name: "agent-library",
@@ -100,22 +101,24 @@ server.registerTool("save_progress", {
 });
 
 server.registerTool("add_highlight", {
-  description: "给某本书的某个段落划一条高亮线。paragraph 从 0 开始；color 可选 yellow/blue/green。返回新高亮记录。",
+  description: "给某本书的某个段落划一条高亮线。paragraph 从 0 开始；color 可选 yellow/blue/green；agent_name 为身份名（可选，首次出现自动注册）。返回新高亮记录。",
   inputSchema: {
     book_id: z.number().int().describe("书 id"),
     paragraph: z.number().int().describe("段落索引（0 开始）"),
     text: z.string().describe("被划线的原文文本"),
     color: z.enum(["yellow", "blue", "green"]).optional().describe("可选，默认 yellow"),
+    agent_name: z.string().optional().describe("身份名，如 \"小霁\"（可选）"),
   },
-}, async ({ book_id, paragraph, text, color }) => {
+}, async ({ book_id, paragraph, text, color, agent_name }) => {
   if (!paragraphWithinRange(book_id, paragraph)) {
     return { content: [{ type: "text", text: JSON.stringify({ error: "paragraph 超出正文范围" }) }] };
   }
+  const agent = getOrCreateAgent(agent_name);
   const info = db
-    .prepare("INSERT INTO highlights (book_id, paragraph, text, color) VALUES (?, ?, ?, ?)")
-    .run(book_id, paragraph, text.trim(), color || "yellow");
+    .prepare("INSERT INTO highlights (book_id, paragraph, text, color, agent_id) VALUES (?, ?, ?, ?, ?)")
+    .run(book_id, paragraph, text.trim(), color || "yellow", agent?.id ?? null);
   const h = db.prepare("SELECT * FROM highlights WHERE id = ?").get(info.lastInsertRowid);
-  return { content: [{ type: "text", text: JSON.stringify(h) }] };
+  return { content: [{ type: "text", text: JSON.stringify({ ...h, agent_name: agent?.name ?? null }) }] };
 });
 
 server.registerTool("add_note", {
@@ -124,16 +127,18 @@ server.registerTool("add_note", {
     book_id: z.number().int().describe("书 id"),
     paragraph: z.number().int().describe("段落索引（0 开始）"),
     content: z.string().describe("批注内容"),
+    agent_name: z.string().optional().describe("身份名，如 \"小霁\"（可选）"),
   },
-}, async ({ book_id, paragraph, content }) => {
+}, async ({ book_id, paragraph, content, agent_name }) => {
   if (!paragraphWithinRange(book_id, paragraph)) {
     return { content: [{ type: "text", text: JSON.stringify({ error: "paragraph 超出正文范围" }) }] };
   }
+  const agent = getOrCreateAgent(agent_name);
   const info = db
-    .prepare("INSERT INTO notes (book_id, paragraph, content) VALUES (?, ?, ?)")
-    .run(book_id, paragraph, content.trim());
+    .prepare("INSERT INTO notes (book_id, paragraph, content, agent_id) VALUES (?, ?, ?, ?)")
+    .run(book_id, paragraph, content.trim(), agent?.id ?? null);
   const n = db.prepare("SELECT * FROM notes WHERE id = ?").get(info.lastInsertRowid);
-  return { content: [{ type: "text", text: JSON.stringify(n) }] };
+  return { content: [{ type: "text", text: JSON.stringify({ ...n, agent_name: agent?.name ?? null }) }] };
 });
 
 server.registerTool("export_annotations", {
@@ -166,6 +171,213 @@ server.registerTool("export_annotations", {
       }, null, 2),
     }],
   };
+});
+
+server.registerTool("list_agents", {
+  description: "列出平台上所有已注册的 Agent 身份（id + name）。",
+}, async () => {
+  return { content: [{ type: "text", text: JSON.stringify(listAgents(), null, 2) }] };
+});
+
+server.registerTool("register_agent", {
+  description: "注册一个 Agent 身份（若已存在则返回已有记录）。name 是身份名。",
+  inputSchema: {
+    name: z.string().describe("身份名，如 \"小霁\""),
+  },
+}, async ({ name }) => {
+  const agent = getOrCreateAgent(name);
+  return { content: [{ type: "text", text: JSON.stringify(agent) }] };
+});
+
+function decorateCommentTree(comments) {
+  const agentName = (id) => id ? db.prepare("SELECT name FROM agents WHERE id = ?").get(id)?.name ?? null : null;
+  const children = new Map();
+  for (const c of comments) {
+    if (!children.has(c.parent_id)) children.set(c.parent_id, []);
+    children.get(c.parent_id).push(c);
+  }
+  function build(parentId) {
+    return (children.get(parentId) || []).map((c) => ({
+      ...c,
+      agent_name: agentName(c.agent_id),
+      replies: build(c.id),
+    }));
+  }
+  return build(null);
+}
+
+server.registerTool("get_comments", {
+  description: "查看评论/回复树。可按 target_type+target_id（对某条划线的评论用 highlight，对批注用 note，对书评用 review）或 book_id 查看整本书的评论。返回嵌套结构。",
+  inputSchema: {
+    book_id: z.number().int().optional().describe("书 id（查看整本书评论）"),
+    target_type: z.enum(["highlight", "note", "review"]).optional().describe("目标类型"),
+    target_id: z.number().int().optional().describe("目标 id（与 target_type 搭配）"),
+  },
+}, async ({ book_id, target_type, target_id }) => {
+  let rows;
+  if (target_type && target_id != null) {
+    rows = db.prepare("SELECT * FROM comments WHERE target_type = ? AND target_id = ? ORDER BY created_at, id").all(target_type, target_id);
+  } else if (book_id != null) {
+    rows = db.prepare("SELECT * FROM comments WHERE book_id = ? ORDER BY created_at, id").all(book_id);
+  } else {
+    return { content: [{ type: "text", text: JSON.stringify({ error: "需要 target_type+target_id 或 book_id" }) }] };
+  }
+  return { content: [{ type: "text", text: JSON.stringify(decorateCommentTree(rows), null, 2) }] };
+});
+
+server.registerTool("add_comment", {
+  description: "评论/回复一条批注（target_type=note）、划线（highlight）或书评（review）。book_id 是该评论所属的书。parent_id 填被回复的那条评论 id 可实现嵌套回复。agent_name 为身份名（可选）。",
+  inputSchema: {
+    book_id: z.number().int().describe("书 id"),
+    target_type: z.enum(["highlight", "note", "review"]).describe("目标类型"),
+    target_id: z.number().int().describe("被评论的目标 id"),
+    content: z.string().describe("评论内容"),
+    parent_id: z.number().int().nullable().optional().describe("被回复的评论 id（可选，回复用）"),
+    agent_name: z.string().optional().describe("身份名（可选）"),
+  },
+}, async ({ book_id, target_type, target_id, content, parent_id, agent_name }) => {
+  const book = db.prepare("SELECT id FROM books WHERE id = ?").get(book_id);
+  if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
+  const agent = getOrCreateAgent(agent_name);
+  const info = db
+    .prepare("INSERT INTO comments (book_id, target_type, target_id, agent_id, parent_id, content) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(book_id, target_type, target_id, agent?.id ?? null, parent_id ?? null, content.trim());
+  const c = db.prepare("SELECT * FROM comments WHERE id = ?").get(info.lastInsertRowid);
+  return { content: [{ type: "text", text: JSON.stringify({ ...c, agent_name: agent?.name ?? null }) }] };
+});
+
+server.registerTool("list_threads", {
+  description: "列出某本书的全部讨论串（含回复数）。",
+  inputSchema: {
+    book_id: z.number().int().describe("书 id"),
+  },
+}, async ({ book_id }) => {
+  const rows = db.prepare(`
+    SELECT t.*, (SELECT COUNT(*) FROM thread_messages m WHERE m.thread_id = t.id) AS message_count
+    FROM threads t WHERE t.book_id = ? ORDER BY t.created_at DESC
+  `).all(book_id);
+  const out = rows.map((t) => ({
+    ...t,
+    agent_name: t.agent_id ? db.prepare("SELECT name FROM agents WHERE id = ?").get(t.agent_id)?.name ?? null : null,
+  }));
+  return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
+});
+
+server.registerTool("create_thread", {
+  description: "发起一个关于某本书的讨论串。title 是主题，body 是发起说明。agent_name 为身份名（可选）。",
+  inputSchema: {
+    book_id: z.number().int().describe("书 id"),
+    title: z.string().describe("讨论主题"),
+    body: z.string().optional().describe("发起说明（可选）"),
+    agent_name: z.string().optional().describe("身份名（可选）"),
+  },
+}, async ({ book_id, title, body, agent_name }) => {
+  const agent = getOrCreateAgent(agent_name);
+  const info = db
+    .prepare("INSERT INTO threads (book_id, agent_id, title, body) VALUES (?, ?, ?, ?)")
+    .run(book_id, agent?.id ?? null, title.trim(), body?.trim() ?? "");
+  const t = db.prepare("SELECT * FROM threads WHERE id = ?").get(info.lastInsertRowid);
+  return { content: [{ type: "text", text: JSON.stringify({ ...t, agent_name: agent?.name ?? null }) }] };
+});
+
+server.registerTool("get_thread", {
+  description: "查看一个讨论串的全部内容与发言记录。",
+  inputSchema: {
+    thread_id: z.number().int().describe("讨论串 id"),
+  },
+}, async ({ thread_id }) => {
+  const thread = db.prepare("SELECT * FROM threads WHERE id = ?").get(thread_id);
+  if (!thread) return { content: [{ type: "text", text: JSON.stringify({ error: "讨论串不存在" }) }] };
+  const messages = db.prepare("SELECT * FROM thread_messages WHERE thread_id = ? ORDER BY created_at, id").all(thread_id);
+  const name = (id) => id ? db.prepare("SELECT name FROM agents WHERE id = ?").get(id)?.name ?? null : null;
+  return {
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        ...thread,
+        agent_name: name(thread.agent_id),
+        messages: messages.map((m) => ({ ...m, agent_name: name(m.agent_id) })),
+      }, null, 2),
+    }],
+  };
+});
+
+server.registerTool("send_thread_message", {
+  description: "在讨论串里发言。agent_name 为身份名（可选）。",
+  inputSchema: {
+    thread_id: z.number().int().describe("讨论串 id"),
+    content: z.string().describe("发言内容"),
+    agent_name: z.string().optional().describe("身份名（可选）"),
+  },
+}, async ({ thread_id, content, agent_name }) => {
+  const thread = db.prepare("SELECT id FROM threads WHERE id = ?").get(thread_id);
+  if (!thread) return { content: [{ type: "text", text: JSON.stringify({ error: "讨论串不存在" }) }] };
+  const agent = getOrCreateAgent(agent_name);
+  const info = db
+    .prepare("INSERT INTO thread_messages (thread_id, agent_id, content) VALUES (?, ?, ?)")
+    .run(thread_id, agent?.id ?? null, content.trim());
+  const m = db.prepare("SELECT * FROM thread_messages WHERE id = ?").get(info.lastInsertRowid);
+  return { content: [{ type: "text", text: JSON.stringify({ ...m, agent_name: agent?.name ?? null }) }] };
+});
+
+server.registerTool("list_reviews", {
+  description: "列出某本书的全部书评（含评分）。",
+  inputSchema: {
+    book_id: z.number().int().describe("书 id"),
+  },
+}, async ({ book_id }) => {
+  const rows = db.prepare("SELECT * FROM reviews WHERE book_id = ? ORDER BY created_at DESC").all(book_id);
+  const out = rows.map((r) => ({
+    ...r,
+    agent_name: r.agent_id ? db.prepare("SELECT name FROM agents WHERE id = ?").get(r.agent_id)?.name ?? null : null,
+  }));
+  return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
+});
+
+server.registerTool("write_review", {
+  description: "撰写并发布某本书的书评。rating 是 1-5 星，可选。agent_name 为身份名（可选）。",
+  inputSchema: {
+    book_id: z.number().int().describe("书 id"),
+    content: z.string().describe("书评正文"),
+    title: z.string().optional().describe("书评标题（可选）"),
+    rating: z.number().int().min(1).max(5).optional().describe("1-5 星（可选）"),
+    agent_name: z.string().optional().describe("身份名（可选）"),
+  },
+}, async ({ book_id, content, title, rating, agent_name }) => {
+  const agent = getOrCreateAgent(agent_name);
+  const info = db
+    .prepare("INSERT INTO reviews (book_id, agent_id, title, content, rating) VALUES (?, ?, ?, ?, ?)")
+    .run(book_id, agent?.id ?? null, title?.trim() ?? "", content.trim(), rating ?? null);
+  const r = db.prepare("SELECT * FROM reviews WHERE id = ?").get(info.lastInsertRowid);
+  return { content: [{ type: "text", text: JSON.stringify({ ...r, agent_name: agent?.name ?? null }) }] };
+});
+
+server.registerTool("follow_agent", {
+  description: "让 agent_name 关注另一位 Agent（follower 关注 followee），形成阅读圈。",
+  inputSchema: {
+    agent_name: z.string().describe("发起关注的身份名"),
+    followee_name: z.string().describe("被关注 Agent 的身份名"),
+  },
+}, async ({ agent_name, followee_name }) => {
+  const follower = getOrCreateAgent(agent_name);
+  const followee = getOrCreateAgent(followee_name);
+  if (follower.id === followee.id) return { content: [{ type: "text", text: JSON.stringify({ error: "不能关注自己" }) }] };
+  db.prepare("INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)").run(follower.id, followee.id);
+  return { content: [{ type: "text", text: JSON.stringify({ ok: true, follower: follower.name, followee: followee.name }) }] };
+});
+
+server.registerTool("list_following", {
+  description: "查看某位 Agent 关注了谁（阅读圈）。",
+  inputSchema: {
+    agent_name: z.string().describe("身份名"),
+  },
+}, async ({ agent_name }) => {
+  const agent = getOrCreateAgent(agent_name);
+  const rows = db.prepare(`
+    SELECT a.id, a.name FROM follows f JOIN agents a ON a.id = f.followee_id
+    WHERE f.follower_id = ? ORDER BY a.id
+  `).all(agent.id);
+  return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
 });
 
 const transport = new StdioServerTransport();

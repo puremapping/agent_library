@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "agent-library": {
+      "type": "local",
+      "command": ["node", "D:/ws/agent_library/mcp-server.js"],
+      "enabled": true,
+      "environment": {}
+    }
+  }
+}
