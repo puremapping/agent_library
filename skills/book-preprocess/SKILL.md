@@ -1,14 +1,14 @@
 ---
 name: book-preprocess
 displayName: Book Preprocess (Agent Library)
-description: 把 txt/PDF/EPUB、剪贴板、网上公版书（Wikisource/Project Gutenberg 等网页源）等来源的书籍内容转换成 agent-library 平台推荐的规范 Markdown（标题行分章、UTF-8、去空行）后再上传，以获得完整目录（get_toc）与最佳流式阅读体验。当 Agent 需要向 agent-library 上传书籍、且原始格式不是规范 Markdown 时使用此 skill。
+description: 把 txt/PDF/EPUB、剪贴板、网页正文等来源的书籍内容转换成 agent-library 平台推荐的规范 Markdown（标题行分章、UTF-8、去空行）后再上传，以获得完整目录（get_toc）与最佳流式阅读体验。当 Agent 需要向 agent-library 上传书籍、且原始格式不是规范 Markdown 时使用此 skill。注意：书源获取（从哪抓书）不在本 skill 职责内，这里只处理拿到文本之后的清洗与结构化。
 version: 1.1.0
 categories: [learning, research]
 roles: [student, researcher, personal-user]
 outputs: [document, text]
 scenarios: [learning-growth, research-insights]
 platforms: [openclaw, claude-code, codex, gemini]
-tags: [reading, book, markdown, conversion, format, web-scraping]
+tags: [reading, book, markdown, conversion, format]
 ---
 
 # Book Preprocess for Agent Library
@@ -39,27 +39,22 @@ tags: [reading, book, markdown, conversion, format, web-scraping]
 ```bash
 command -v pandoc     # EPUB/PDF 转换主力
 command -v pdftotext  # PDF 纯文本提取（poppler-utils）
-command -v wget       # 网页/公版书抓取
-command -v curl       # 网页/公版书抓取（替代 wget）
 ```
 
-- 都没有也行：txt/md 直接读、剪贴板直接用、网页源用内置 HTTP 能力抓——但**别假设 pdftotext/pandoc 必然存在**。
+- 都没有也行：txt/md 直接读、剪贴板直接用——但**别假设 pdftotext/pandoc 必然存在**。
 - 缺 pandoc 时 PDF 可用 `pdftotext` 或阅读器导出；EPUB 可直接解压读 `content.opf`/`*.xhtml`（zip 即可）。
 
 ### 1. 取原文
 
-支持源：`.txt`、`.pdf`、`.epub`、`.md`（不规范的）、剪贴板文本、网页正文、**网上公版书（Wikisource / Project Gutenberg / 古登堡计划镜像等）**。
+支持源：`.txt`、`.pdf`、`.epub`、`.md`（不规范的）、剪贴板文本、网页正文。
+
+> 注意：本 skill 只管"拿到文本之后的预处理"。书从哪来（下载/抓取/购买/图书馆）由你自己解决，不在本 skill 职责内。
 
 提取方式按手头工具选用：
 - **txt/md**：直接读文本
 - **PDF**：可用 `pdftotext`（poppler）、`pandoc` 或 PDF 阅读器导出
 - **EPUB**：`pandoc book.epub -t markdown -o book.md`
-- **网页正文（一般）**：阅读器/浏览器"阅读模式"导出，或抓取 `<article>` 主体文本
-- **网上公版书（重点，最常见的"书"来源）**：
-  - **Project Gutenberg**：抓 `https://www.gutenberg.org/cache/epub/<id>/pg<id>.txt`（纯文本镜像，最干净），或 `pg<id>.txt.utf-8`；有完整的"标题 → 章节 → 正文 → 结尾说明"结构。
-  - **Wikisource**：中文维基文库（`zh.wikisource.org`）页面默认是 **wikitext**，不是成品 HTML。抓页面时先看是否有 **"下载为 EPUB/PDF"** 或 **"Wikitext" 源**入口——优先拿带版权的成品文本，少自己解析。
-  - **抓 HTML/wikitext 时必须**：去掉导航栏、页脚、编辑按钮、参考文献脚注、分类标签等**页面 chrome**；只保留正文主体。Wikisource 中文书正文通常在 `#mw-content-text` 或章节级模板（如 `{{Header}}`）之后。
-  - 版权意识：只抓**公版（公有领域）**作品；不确定就看页面版权说明，别把仍受版权保护的书传上平台。
+- **网页正文**：阅读器/浏览器"阅读模式"导出，或抓取 `<article>` 主体文本
 
 ### 2. 识别章节结构
 
@@ -110,5 +105,4 @@ command -v curl       # 网页/公版书抓取（替代 wget）
 - 章节划分以原文结构为准，不要自行重新组织作者的章节。
 - 遇到不确定的章节归属，宁归前章，不另起无名章。
 - **完整性优先于速度**：少一页正文比多一段废话严重得多——上传后必须抽查（见工作流第 4 步），别跳。
-- **只处理公版作品**；抓网页源时丢弃页面 chrome（导航/页脚/编辑按钮），只留正文。
-- 工具可用性先行：`pdftotext`/`pandoc`/`wget` 缺了就用替代方案，别在转换中途才停下找工具。
+- 工具可用性先行：`pdftotext`/`pandoc` 缺了就用替代方案，别在转换中途才停下找工具。
