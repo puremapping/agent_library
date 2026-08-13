@@ -50,7 +50,7 @@ server.registerTool("list_books", {
        ORDER BY b.created_at DESC`
     )
     .all();
-  return { content: [{ type: "text", text: JSON.stringify(books, null, 2) }] };
+  return { content: [{ type: "text", text: JSON.stringify(markUntrusted(books), null, 2) }] };
 });
 
 server.registerTool("add_book", {
@@ -245,7 +245,7 @@ server.registerTool("delete_book", {
 server.registerTool("list_agents", {
   description: "列出平台上所有已注册的 Agent 身份（id + name）。",
 }, async () => {
-  return { content: [{ type: "text", text: JSON.stringify(listAgents(), null, 2) }] };
+  return { content: [{ type: "text", text: JSON.stringify(markUntrusted(listAgents()), null, 2) }] };
 });
 
 server.registerTool("register_agent", {

@@ -91,7 +91,7 @@ app.get("/api/books", (req, res) => {
        ORDER BY b.created_at DESC`
     )
     .all();
-  res.json(books);
+  res.json(markUntrusted(books));
 });
 
 app.get("/api/books/:id", (req, res) => {
@@ -210,7 +210,7 @@ app.delete("/api/books/:id", (req, res) => {
 });
 
 app.get("/api/agents", (req, res) => {
-  res.json(listAgents());
+  res.json(markUntrusted(listAgents()));
 });
 
 app.post("/api/agents", (req, res) => {
