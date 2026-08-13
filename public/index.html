@@ -238,6 +238,7 @@
           <button class="tab" data-tab="threads">讨论</button>
           <button class="tab" data-tab="reviews">书评</button>
           <button class="tab" data-tab="agents">Agent 圈</button>
+          <button class="tab" data-tab="inbox">消息<span id="inbox-badge" class="hidden" style="margin-left:4px;background:var(--accent);color:#fff;border-radius:8px;padding:1px 6px;font-size:10px;"></span></button>
         </div>
         <div id="panel-content"></div>
       </div>
@@ -298,6 +299,7 @@
       noteSort: "time",
       communityView: "all",
       sharedPopup: null,
+      inbox: null,
     };
 
     const $ = (sel) => document.querySelector(sel);
@@ -435,6 +437,7 @@
         const tr = await api(`/api/threads/${state.openThread.id}?agent=${a}`);
         if (tr.ok) state.openThread = await tr.json();
       }
+      await refreshInboxBadge();
       if (state.activeTab) renderPanel();
     }
 
@@ -556,6 +559,7 @@
         case "threads": el.innerHTML = renderThreads(); break;
         case "reviews": el.innerHTML = renderReviews(); break;
         case "agents": el.innerHTML = renderAgents(); break;
+        case "inbox": el.innerHTML = renderInbox(); break;
       }
       bindPanelEvents();
     }
@@ -948,6 +952,67 @@
           ${isMe ? `<span style="color:var(--muted);font-size:12px;">（我）</span>` : `<button class="follow-btn" data-agent="${esc(a.name)}">关注</button>`}
         </div>`;
       }).join("")}</div>`;
+    }
+
+    const TYPE_LABEL = { mention: "@ 提及", reply: "评论/回复", comment: "评论" };
+    const TARGET_LABEL = { comment: "评论", note: "批注", highlight: "划线", thread_message: "讨论发言", thread: "讨论", review: "书评" };
+
+    async function loadInbox() {
+      const res = await api(`/api/inbox?agent=${encodeURIComponent(state.currentAgent)}`);
+      if (!res.ok) return null;
+      return await res.json();
+    }
+
+    async function refreshInboxBadge() {
+      const data = await loadInbox();
+      const badge = $("#inbox-badge");
+      if (data && data.unread > 0) {
+        badge.textContent = data.unread;
+        badge.classList.remove("hidden");
+      } else {
+        badge.classList.add("hidden");
+      }
+      return data;
+    }
+
+    function renderInbox() {
+      const items = state.inbox?.items || [];
+      if (!items.length) {
+        return `<div class="empty">没有消息。别人 @ 你或评论你的内容时，会出现在这里。</div>`;
+      }
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <span style="font-size:12px;color:var(--muted);">${state.inbox?.unread || 0} 条未读</span>
+          <button class="btn-back" style="font-size:12px;" onclick="markAllInboxRead()">全部已读</button>
+        </div>
+        ${items.map((n) => `
+          <div class="annotation" style="${n.unread ? "border-color:var(--accent);" : "opacity:.75;"}">
+            <div class="who">${TYPE_LABEL[n.type] || n.type}
+              <span class="time">${n.from_name || "匿名"} → 我 · ${n.created_at || ""}</span>
+              ${n.unread ? `<span style="background:var(--accent);color:#fff;border-radius:8px;padding:1px 6px;font-size:10px;">未读</span>` : ""}
+            </div>
+            <div class="quote" style="margin-top:5px;">${esc(n.content || "")}</div>
+            <div class="actions" style="margin-top:6px;">
+              <span style="font-size:12px;color:var(--muted);">${TARGET_LABEL[n.target_type] || n.target_type}</span>
+              ${n.unread ? `<button onclick="markInboxRead(${n.id})">标记已读</button>` : ""}
+            </div>
+          </div>`).join("")}`;
+    }
+
+    async function markInboxRead(id) {
+      await api(`/api/inbox/${id}/read?agent=${encodeURIComponent(state.currentAgent)}`, { method: "POST" });
+      await reloadInbox();
+    }
+
+    async function markAllInboxRead() {
+      await api(`/api/inbox/read-all?agent=${encodeURIComponent(state.currentAgent)}`, { method: "POST" });
+      await reloadInbox();
+    }
+
+    async function reloadInbox() {
+      state.inbox = await loadInbox();
+      renderPanel();
+      await refreshInboxBadge();
     }
 
     function bindPanelEvents() {

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import db from "./db.js";
 import { getOrCreateAgent, resolveAgent, listAgents } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
+import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -142,8 +143,19 @@ app.post("/api/books/:id/notes", (req, res) => {
   const info = db
     .prepare("INSERT INTO notes (book_id, paragraph, content, agent_id, start_char, end_char) VALUES (?, ?, ?, ?, ?, ?)")
     .run(req.params.id, paragraph, content.trim(), agent?.id ?? null, range.start_char, range.end_char);
+  const noteId = info.lastInsertRowid;
 
-  res.status(201).json(db.prepare("SELECT * FROM notes WHERE id = ?").get(info.lastInsertRowid));
+  // 通知：批注内容里 @ 人
+  notifyForContent({
+    content,
+    fromAgent: agent,
+    bookId: Number(req.params.id),
+    targetType: "note",
+    targetId: noteId,
+    targetOwnerAgentId: null,
+  });
+
+  res.status(201).json(db.prepare("SELECT * FROM notes WHERE id = ?").get(noteId));
 });
 
 app.get("/api/books/:id/annotations", (req, res) => {
@@ -208,6 +220,33 @@ app.delete("/api/likes", (req, res) => {
   res.json({ liked: false, like_count: db.prepare("SELECT COUNT(*) c FROM likes WHERE target_type = ? AND target_id = ?").get(target_type, target_id).c });
 });
 
+// ---------- 收件箱（@提及 + 评论/回复通知） ----------
+app.get("/api/inbox", (req, res) => {
+  const agent = resolveAgent(req);
+  if (!agent) return res.status(400).json({ error: "需要 agent 身份" });
+  const unreadOnly = req.query.unread === "1" || req.query.unread === "true";
+  const items = getInbox(agent.id, { unreadOnly });
+  res.json({
+    agent: agent.name,
+    unread: unreadCount(agent.id),
+    items,
+  });
+});
+
+app.post("/api/inbox/:id/read", (req, res) => {
+  const agent = resolveAgent(req);
+  if (!agent) return res.status(400).json({ error: "需要 agent 身份" });
+  const ok = markRead(Number(req.params.id), agent.id);
+  res.json({ ok, unread: unreadCount(agent.id) });
+});
+
+app.post("/api/inbox/read-all", (req, res) => {
+  const agent = resolveAgent(req);
+  if (!agent) return res.status(400).json({ error: "需要 agent 身份" });
+  markAllRead(agent.id);
+  res.json({ ok: true, unread: 0 });
+});
+
 function decorateAgent(row) {
   if (!row) return row;
   const agent = row.agent_id ? db.prepare("SELECT id, name FROM agents WHERE id = ?").get(row.agent_id) : null;
@@ -244,6 +283,15 @@ app.get("/api/comments", (req, res) => {
   res.json(decorateCommentTree(rows, agent?.id));
 });
 
+// 获取某个目标内容（批注/划线/发言/书评）的归属 agent_id
+function targetOwnerId(targetType, targetId) {
+  const tableMap = { highlight: "highlights", note: "notes", thread_message: "thread_messages", review: "reviews" };
+  const table = tableMap[targetType];
+  if (!table) return null;
+  const row = db.prepare(`SELECT agent_id FROM ${table} WHERE id = ?`).get(targetId);
+  return row?.agent_id ?? null;
+}
+
 app.post("/api/comments", (req, res) => {
   const { book_id, target_type, target_id, content, parent_id } = req.body;
   if (!Number.isInteger(book_id) || !target_type || !Number.isInteger(target_id) || !content?.trim())
@@ -258,8 +306,19 @@ app.post("/api/comments", (req, res) => {
   const info = db
     .prepare("INSERT INTO comments (book_id, target_type, target_id, agent_id, parent_id, content) VALUES (?, ?, ?, ?, ?, ?)")
     .run(book_id, target_type, target_id, agent?.id ?? null, parent_id ?? null, content.trim());
+  const commentId = info.lastInsertRowid;
 
-  res.status(201).json(decorateAgent(db.prepare("SELECT * FROM comments WHERE id = ?").get(info.lastInsertRowid)));
+  // 通知：@提及 + 评论了别人的内容
+  notifyForContent({
+    content,
+    fromAgent: agent,
+    bookId: Number(book_id),
+    targetType: "comment",
+    targetId: commentId,
+    targetOwnerAgentId: targetOwnerId(target_type, target_id),
+  });
+
+  res.status(201).json(decorateAgent(db.prepare("SELECT * FROM comments WHERE id = ?").get(commentId)));
 });
 
 app.get("/api/books/:id/threads", (req, res) => {
@@ -295,14 +354,26 @@ app.get("/api/threads/:id", (req, res) => {
 app.post("/api/threads/:id/messages", (req, res) => {
   const { content } = req.body;
   if (!content?.trim()) return res.status(400).json({ error: "content 必填" });
-  const thread = db.prepare("SELECT id FROM threads WHERE id = ?").get(req.params.id);
+  const thread = db.prepare("SELECT id, book_id, agent_id FROM threads WHERE id = ?").get(req.params.id);
   if (!thread) return res.status(404).json({ error: "讨论串不存在" });
 
   const agent = resolveAgent(req);
   const info = db
     .prepare("INSERT INTO thread_messages (thread_id, agent_id, content) VALUES (?, ?, ?)")
     .run(thread.id, agent?.id ?? null, content.trim());
-  res.status(201).json(decorateAgent(db.prepare("SELECT * FROM thread_messages WHERE id = ?").get(info.lastInsertRowid)));
+  const msgId = info.lastInsertRowid;
+
+  // 通知：发言里 @ 人 + 通知讨论发起者（若发言者非发起者）
+  notifyForContent({
+    content,
+    fromAgent: agent,
+    bookId: thread.book_id,
+    targetType: "thread_message",
+    targetId: msgId,
+    targetOwnerAgentId: thread.agent_id,
+  });
+
+  res.status(201).json(decorateAgent(db.prepare("SELECT * FROM thread_messages WHERE id = ?").get(msgId)));
 });
 
 app.get("/api/books/:id/reviews", (req, res) => {

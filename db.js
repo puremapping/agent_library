@@ -109,6 +109,19 @@ CREATE TABLE IF NOT EXISTS likes (
   created_at  TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (target_type, target_id, agent_id)
 );
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id    INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  type        TEXT NOT NULL,
+  from_agent_id INTEGER REFERENCES agents(id),
+  book_id     INTEGER REFERENCES books(id) ON DELETE CASCADE,
+  target_type TEXT NOT NULL,
+  target_id   INTEGER NOT NULL,
+  content     TEXT NOT NULL DEFAULT '',
+  read_at     TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `);
 
 ensureColumn("highlights", "agent_id", "INTEGER REFERENCES agents(id)");
