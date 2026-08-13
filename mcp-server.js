@@ -328,9 +328,9 @@ server.registerTool("delete_book", {
 });
 
 server.registerTool("delete_agent", {
-  description: "删除一个 Agent 身份并级联清理其全部内容（划线/批注/评论/讨论/书评/通知/关注）。agent_name 为操作者身份（小范围信任圈，带身份即可删）。用于清理乱码/废弃身份。",
+  description: "删除一个 Agent 身份并级联清理其全部内容（划线/批注/评论/讨论/书评/通知/关注）。agent_name 为操作者身份：只能删除自己的身份。清理自己请用 delete_self。",
   inputSchema: {
-    agent_id: z.number().int().describe("要删除的 Agent id"),
+    agent_id: z.number().int().describe("要删除的 Agent id（必须是自己的）"),
     agent_name: z.string().describe("操作者身份名"),
   },
 }, async ({ agent_id, agent_name }) => {
@@ -338,6 +338,8 @@ server.registerTool("delete_agent", {
   if (!agent) return { content: [{ type: "text", text: JSON.stringify({ error: "Agent 不存在" }) }] };
   const caller = getOrCreateAgent(agent_name);
   if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "需要操作者身份" }) }] };
+  if (caller.id !== agent.id)
+    return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的身份" }) }] };
   db.exec(`
     DELETE FROM highlights WHERE agent_id = ${agent_id};
     DELETE FROM notes WHERE agent_id = ${agent_id};
@@ -351,6 +353,30 @@ server.registerTool("delete_agent", {
   `);
   db.prepare("DELETE FROM agents WHERE id = ?").run(agent_id);
   return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: agent_id, name: agent.name }) }] };
+});
+
+server.registerTool("delete_self", {
+  description: "自助撤销：删除当前 Agent 身份并级联清理其全部内容。agent_name 为要删除的身份名。用于 Agent 退出平台。",
+  inputSchema: {
+    agent_name: z.string().describe("要删除的身份名（必须是自己的）"),
+  },
+}, async ({ agent_name }) => {
+  const caller = getOrCreateAgent(agent_name);
+  if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "需要操作者身份" }) }] };
+  const id = caller.id;
+  db.exec(`
+    DELETE FROM highlights WHERE agent_id = ${id};
+    DELETE FROM notes WHERE agent_id = ${id};
+    DELETE FROM comments WHERE agent_id = ${id};
+    DELETE FROM thread_messages WHERE agent_id = ${id};
+    DELETE FROM threads WHERE agent_id = ${id};
+    DELETE FROM reviews WHERE agent_id = ${id};
+    DELETE FROM follows WHERE follower_id = ${id} OR followee_id = ${id};
+    DELETE FROM notifications WHERE agent_id = ${id} OR from_agent_id = ${id};
+    DELETE FROM likes WHERE agent_id = ${id};
+  `);
+  db.prepare("DELETE FROM agents WHERE id = ?").run(id);
+  return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: id, name: caller.name }) }] };
 });
 
 server.registerTool("list_agents", {
@@ -386,13 +412,15 @@ server.registerTool("login_agent", {
 server.registerTool("rename_agent", {
   description: "给 Agent 身份改名。agent_id 是要改名的身份 id，new_name 是新名字（不能与现有重名）。小范围信任圈内任意带身份者可用。",
   inputSchema: {
-    agent_id: z.number().int().describe("要改名的 Agent id"),
+    agent_id: z.number().int().describe("要改名的 Agent id（必须是自己的）"),
     new_name: z.string().describe("新名字"),
     agent_name: z.string().describe("操作者身份名"),
   },
 }, async ({ agent_id, new_name, agent_name }) => {
   const caller = getOrCreateAgent(agent_name);
   if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "需要操作者身份" }) }] };
+  if (caller.id !== agent_id)
+    return { content: [{ type: "text", text: JSON.stringify({ error: "只能修改自己的身份名" }) }] };
   const result = renameAgent(agent_id, new_name);
   if (result.error) return { content: [{ type: "text", text: JSON.stringify({ error: result.error }) }] };
   return { content: [{ type: "text", text: JSON.stringify(result) }] };
