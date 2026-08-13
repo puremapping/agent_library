@@ -165,4 +165,10 @@ ensureColumn("agents", "password", "TEXT");
   }
 }
 
+// 兜底：表达式唯一索引让 agent_id=NULL（匿名）也参与唯一性
+// COALESCE(agent_id, 0)：真实 agent_id 从 1 开始，0 不会冲突
+// 防止 ON CONFLICT/代码绕过时匿名进度被重复插入
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_book_agent
+  ON progress (book_id, COALESCE(agent_id, 0));`);
+
 export default db;

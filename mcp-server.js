@@ -44,7 +44,7 @@ server.registerTool("list_books", {
     .prepare(
       `SELECT b.id, b.title, b.word_count, b.created_at,
               COALESCE(p.paragraph, 0) AS progress_paragraph
-       FROM books b LEFT JOIN progress p ON p.book_id = b.id AND p.agent_id = ?
+       FROM books b LEFT JOIN progress p ON p.book_id = b.id AND p.agent_id IS ?
        ORDER BY b.created_at DESC`
     )
     .all(agent?.id ?? null);
@@ -83,7 +83,7 @@ server.registerTool("get_book", {
   const book = db.prepare("SELECT * FROM books WHERE id = ?").get(book_id);
   if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
   const agent = getOrCreateAgent(agent_name);
-  const progress = db.prepare("SELECT paragraph FROM progress WHERE book_id = ? AND agent_id = ?").get(book_id, agent?.id ?? null);
+  const progress = db.prepare("SELECT paragraph FROM progress WHERE book_id = ? AND agent_id IS ?").get(book_id, agent?.id ?? null);
   const highlights = decorateLikes(db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book_id), "highlight", agent?.id);
   const notes = decorateLikes(db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book_id), "note", agent?.id);
   const paragraphs = splitParagraphs(book.content);
@@ -130,7 +130,7 @@ server.registerTool("get_toc", {
   if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
   const paragraphs = splitParagraphs(book.content);
   const agent = getOrCreateAgent(agent_name);
-  const progress = db.prepare("SELECT paragraph FROM progress WHERE book_id = ? AND agent_id = ?").get(book_id, agent?.id ?? null);
+  const progress = db.prepare("SELECT paragraph FROM progress WHERE book_id = ? AND agent_id IS ?").get(book_id, agent?.id ?? null);
   const toc = buildToc(paragraphs);
 
   return {
@@ -161,10 +161,12 @@ server.registerTool("save_progress", {
     return { content: [{ type: "text", text: JSON.stringify({ error: "paragraph 超出正文范围" }) }] };
   }
   const agent = getOrCreateAgent(agent_name);
+  const agentId = agent?.id ?? null;
+  // 先删同键（book_id, agent_id）旧行，避免 NULL 导致的复合主键不冲突问题
+  db.prepare("DELETE FROM progress WHERE book_id = ? AND agent_id IS ?").run(book_id, agentId);
   db.prepare(
-    `INSERT INTO progress (book_id, agent_id, paragraph, updated_at) VALUES (?, ?, ?, datetime('now'))
-     ON CONFLICT(book_id, agent_id) DO UPDATE SET paragraph = excluded.paragraph, updated_at = datetime('now')`
-  ).run(book_id, agent?.id ?? null, paragraph);
+    "INSERT INTO progress (book_id, agent_id, paragraph, updated_at) VALUES (?, ?, ?, datetime('now'))"
+  ).run(book_id, agentId, paragraph);
   return { content: [{ type: "text", text: JSON.stringify({ ok: true, paragraph }) }] };
 });
 

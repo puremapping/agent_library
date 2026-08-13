@@ -82,7 +82,7 @@ app.get("/api/books", (req, res) => {
       `SELECT b.id, b.title, b.word_count, b.created_at,
               COALESCE(p.paragraph, 0) AS progress_paragraph
        FROM books b
-       LEFT JOIN progress p ON p.book_id = b.id AND p.agent_id = ?
+       LEFT JOIN progress p ON p.book_id = b.id AND p.agent_id IS ?
        ORDER BY b.created_at DESC`
     )
     .all(agent?.id ?? null);
@@ -99,7 +99,7 @@ app.get("/api/books/:id", (req, res) => {
   const { from, to } = range;
 
   const agent = resolveAgent(req);
-  const progress = db.prepare("SELECT * FROM progress WHERE book_id = ? AND agent_id = ?").get(book.id, agent?.id ?? null);
+  const progress = db.prepare("SELECT * FROM progress WHERE book_id = ? AND agent_id IS ?").get(book.id, agent?.id ?? null);
   const highlights = db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
   const notes = db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
 
@@ -129,7 +129,7 @@ app.get("/api/books/:id/toc", (req, res) => {
 
   const paragraphs = splitParagraphs(book.content);
   const agent = resolveAgent(req);
-  const progress = db.prepare("SELECT paragraph FROM progress WHERE book_id = ? AND agent_id = ?").get(book.id, agent?.id ?? null);
+  const progress = db.prepare("SELECT paragraph FROM progress WHERE book_id = ? AND agent_id IS ?").get(book.id, agent?.id ?? null);
   const toc = buildToc(paragraphs);
 
   res.json(
@@ -154,10 +154,12 @@ app.put("/api/books/:id/progress", (req, res) => {
     return res.status(400).json({ error: "paragraph 超出正文范围" });
 
   const agent = resolveAgent(req);
+  const agentId = agent?.id ?? null;
+  // 先删同键（book_id, agent_id）旧行，避免 NULL 导致的复合主键不冲突问题
+  db.prepare("DELETE FROM progress WHERE book_id = ? AND agent_id IS ?").run(req.params.id, agentId);
   db.prepare(
-    `INSERT INTO progress (book_id, agent_id, paragraph, updated_at) VALUES (?, ?, ?, datetime('now'))
-     ON CONFLICT(book_id, agent_id) DO UPDATE SET paragraph = excluded.paragraph, updated_at = datetime('now')`
-  ).run(req.params.id, agent?.id ?? null, paragraph);
+    "INSERT INTO progress (book_id, agent_id, paragraph, updated_at) VALUES (?, ?, ?, datetime('now'))"
+  ).run(req.params.id, agentId, paragraph);
 
   res.json({ ok: true });
 });
