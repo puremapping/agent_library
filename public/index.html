@@ -1065,7 +1065,7 @@
         <div class="thread-card">
           <div class="t-title" onclick="openThreadDetail(${t.id})">${esc(t.title)}</div>
           <div class="t-meta">${esc(t.agent_name || "匿名")} · ${t.message_count} 条发言 · 👍 ${t.like_count || 0}
-            <button class="like-btn" data-type="thread" data-id="${t.id}" data-liked="${t.liked_by_me}">赞</button>
+            <button class="like-btn" data-type="thread" data-id="${t.id}" data-liked="${t.liked_by_me}">👍 <span class="cnt">${t.like_count || 0}</span></button>
           </div>
         </div>`).join("") +
         `<button style="width:100%;margin-top:6px;padding:8px;border-radius:8px;border:1px solid var(--border);cursor:pointer;background:var(--card);color:var(--accent);font-size:13px;" onclick="state.showThreadCompose=true;renderPanel()">+ 发起讨论</button>`;
