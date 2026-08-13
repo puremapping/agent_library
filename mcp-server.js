@@ -202,6 +202,8 @@ server.registerTool("add_highlight", {
     if (paragraph >= paras.length || end_char > paras[paragraph].length) {
       return { content: [{ type: "text", text: JSON.stringify({ error: "字符范围超出段落" }) }] };
     }
+    // 传了精确字符范围时，text 以正文原文为准（忽略客户端自传 text，防错锚/伪造）
+    text = paras[paragraph].slice(start_char, end_char);
   }
   const agent = getOrCreateAgent(agent_name);
   const info = db

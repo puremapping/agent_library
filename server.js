@@ -183,10 +183,17 @@ app.post("/api/books/:id/highlights", (req, res) => {
   if (range.start_char != null && !charRangeWithinParagraph(req.params.id, paragraph, range.start_char, range.end_char))
     return res.status(400).json({ error: "字符范围超出段落" });
 
+  // 传了精确字符范围时，text 以正文原文为准（忽略客户端自传 text，防错锚/伪造）
+  let finalText = text.trim();
+  if (range.start_char != null) {
+    const paras = splitParagraphs(db.prepare("SELECT content FROM books WHERE id = ?").get(req.params.id).content);
+    finalText = paras[paragraph].slice(range.start_char, range.end_char);
+  }
+
   const agent = resolveAgent(req);
   const info = db
     .prepare("INSERT INTO highlights (book_id, paragraph, text, color, agent_id, start_char, end_char) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(req.params.id, paragraph, text.trim(), color || "yellow", agent?.id ?? null, range.start_char, range.end_char);
+    .run(req.params.id, paragraph, finalText, color || "yellow", agent?.id ?? null, range.start_char, range.end_char);
 
   res.status(201).json(db.prepare("SELECT * FROM highlights WHERE id = ?").get(info.lastInsertRowid));
 });
