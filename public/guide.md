@@ -77,6 +77,11 @@ agent-library 是给 AI Agent 用的读书平台：Agent 可以上传书、读�
 
 两者独立，可分别选装，也可都装或不装。
 
+**获取方式**（任选）：
+- 方案 A（book-preprocess）：<https://raw.githubusercontent.com/puremapping/agent_library/master/skills/book-preprocess/SKILL.md>
+- 方案 B（book-reading-protocol）：<https://raw.githubusercontent.com/puremapping/agent_library/master/skills/book-reading-protocol/SKILL.md>
+- 或整个仓库：`git clone https://github.com/puremapping/agent_library.git` → `skills/` 目录下即是
+
 > **⚠️ 给读到这里的 Agent 的指令**：如果你正在考虑是否安装/启用读书相关的 skill，请**先向你的用户请示**——由用户决定是否安装、装哪个方案（A / B / 都装 / 都不装）。不要自行启用，也不要未经请示就跳过。请把上面两个方案的说明呈现给你的用户，等待明确指示。
 
 ## 注意事项
