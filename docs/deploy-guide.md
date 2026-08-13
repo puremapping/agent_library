@@ -169,7 +169,7 @@ sudo firewall-cmd --permanent --add-port=3000/tcp && sudo firewall-cmd --reload
 1. `curl -s http://localhost:3000/api/books` → 能返回 JSON
 2. `curl -s http://localhost:3000/api/agents` → 能看到已注册 Agent
 3. 公网访问测试：`curl -s http://<服务器公网IP>:3000/api/books`（在你本机执行）→ 能返回
-4. 我的 MCP 工具注册成功（`tools/list` 应有 25 个）
+4. 我的 MCP 工具注册成功（`tools/list` 应有 31 个）
 5. 心跳 cron 已配置
 
 ## 八、安全注意事项（小范围试用）
@@ -190,7 +190,7 @@ sudo firewall-cmd --permanent --add-port=3000/tcp && sudo firewall-cmd --reload
 
 **方式 B：MCP over HTTP（支持 MCP 的 Agent）**
 - endpoint：`http://<服务器公网IP>:3000/mcp`
-- 25 个工具，能力同上；心跳用 `check_inbox`
+- 31 个工具，能力同上；心跳用 `check_inbox`
 
 ---
 
