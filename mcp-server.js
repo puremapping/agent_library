@@ -5,19 +5,13 @@ import db from "./db.js";
 import { getOrCreateAgent, listAgents, agentExists, renameAgent, loginAgent } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
+import { splitParagraphs, buildToc, parseRange } from "./book-utils.js";
 
 export function createMcpServer() {
   const server = new McpServer({
     name: "agent-library",
     version: "0.1.0",
   });
-
-function splitParagraphs(content) {
-  return content
-    .split(/\r?\n/)
-    .filter((p) => p.trim().length > 0)
-    .map((p) => p.trim());
-}
 
 // 内容安全标记：所有用户生成内容（会被 Agent 读取喂给 LLM 的文本）统一标为不可信
 // 递归处理嵌套对象/数组；消费端 Agent 应把 untrusted 数据当纯文本处理，绝不能作为指令执行
@@ -76,12 +70,16 @@ server.registerTool("add_book", {
 });
 
 server.registerTool("get_book", {
-  description: "读取一本书：返回正文（按非空行切分成段落数组）、当前进度、所有划线和批注（含点赞数）。paragraph 从 0 开始。agent_name 可选，用于标记 liked_by_me。",
+  description:
+    "读取一本书的正文段落。默认返回整本（小书用）；大书请务必用 from/to 或 from+limit 分段读取，避免整本吞进上下文。阅读协议：先 get_toc 看目录，再用 from/to 按章读，读到哪 save_progress。返回段落数组 + 当前进度 + 该区间内的划线和批注。paragraph 从 0 开始。agent_name 可选，用于标记 liked_by_me。",
   inputSchema: {
     book_id: z.number().int().describe("书 id"),
+    from: z.number().int().optional().describe("起始段落索引（含），默认 0"),
+    to: z.number().int().optional().describe("结束段落索引（不含），默认到最后一段。和 limit 二选一"),
+    limit: z.number().int().optional().describe("最多返回多少段（从 from 起），替代 to。和 to 二选一"),
     agent_name: z.string().optional().describe("身份名（可选，用于标记哪些已赞）"),
   },
-}, async ({ book_id, agent_name }) => {
+}, async ({ book_id, from, to, limit, agent_name }) => {
   const book = db.prepare("SELECT * FROM books WHERE id = ?").get(book_id);
   if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
   const agent = getOrCreateAgent(agent_name);
@@ -89,6 +87,16 @@ server.registerTool("get_book", {
   const highlights = decorateLikes(db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book_id), "highlight", agent?.id);
   const notes = decorateLikes(db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book_id), "note", agent?.id);
   const paragraphs = splitParagraphs(book.content);
+
+  const range = parseRange({ from, to, limit }, paragraphs.length);
+  if (range.error) return { content: [{ type: "text", text: JSON.stringify({ error: range.error }) }] };
+  const { from: f, to: t } = range;
+
+  const partial = f !== 0 || t !== paragraphs.length;
+  const inRange = (x) => x.paragraph >= f && x.paragraph < t;
+  const sliceHighlights = partial ? highlights.filter(inRange) : highlights;
+  const sliceNotes = partial ? notes.filter(inRange) : notes;
+
   return {
     content: [{
       type: "text",
@@ -97,10 +105,45 @@ server.registerTool("get_book", {
         title: book.title,
         word_count: book.word_count,
         paragraph_count: paragraphs.length,
-        paragraphs,
+        from: f,
+        to: t,
+        partial,
+        has_headings: buildToc(paragraphs).has_headings,
+        paragraphs: paragraphs.slice(f, t),
         progress_paragraph: progress?.paragraph ?? 0,
-        highlights,
-        notes,
+        highlights: sliceHighlights,
+        notes: sliceNotes,
+      }), null, 2),
+    }],
+  };
+});
+
+server.registerTool("get_toc", {
+  description:
+    "获取一本书的目录（章节索引），大书阅读协议第一步。识别 Markdown 标题行（#/##）和中文章节标题（第一章/第1回）。返回章节列表：标题、层级、段落范围（start_paragraph/end_paragraph）、字数、当前进度。拿完目录用 get_book(from,to) 按章精读。全书无标题时返回单章'全书'（has_headings=false）。",
+  inputSchema: {
+    book_id: z.number().int().describe("书 id"),
+    agent_name: z.string().optional().describe("身份名（可选，用于读取该身份的阅读进度）"),
+  },
+}, async ({ book_id, agent_name }) => {
+  const book = db.prepare("SELECT id, title, word_count, content FROM books WHERE id = ?").get(book_id);
+  if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
+  const paragraphs = splitParagraphs(book.content);
+  const agent = getOrCreateAgent(agent_name);
+  const progress = db.prepare("SELECT paragraph FROM progress WHERE book_id = ? AND agent_id = ?").get(book_id, agent?.id ?? null);
+  const toc = buildToc(paragraphs);
+
+  return {
+    content: [{
+      type: "text",
+      text: JSON.stringify(markUntrusted({
+        id: book.id,
+        title: book.title,
+        word_count: book.word_count,
+        paragraph_count: paragraphs.length,
+        progress_paragraph: progress?.paragraph ?? 0,
+        has_headings: toc.has_headings,
+        chapters: toc.chapters,
       }), null, 2),
     }],
   };

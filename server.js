@@ -6,6 +6,7 @@ import db from "./db.js";
 import { getOrCreateAgent, resolveAgent, listAgents, agentExists, renameAgent, loginAgent } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
+import { splitParagraphs, buildToc, parseRange } from "./book-utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -35,13 +36,6 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
 });
-
-function splitParagraphs(content) {
-  return content
-    .split(/\r?\n/)
-    .filter((p) => p.trim().length > 0)
-    .map((p) => p.trim());
-}
 
 function paragraphWithinRange(bookId, paragraph) {
   const book = db.prepare("SELECT content FROM books WHERE id = ?").get(bookId);
@@ -99,18 +93,57 @@ app.get("/api/books/:id", (req, res) => {
   const book = db.prepare("SELECT * FROM books WHERE id = ?").get(req.params.id);
   if (!book) return res.status(404).json({ error: "书不存在" });
 
+  const paragraphs = splitParagraphs(book.content);
+  const range = parseRange(req.query, paragraphs.length);
+  if (range.error) return res.status(400).json({ error: range.error });
+  const { from, to } = range;
+
   const agent = resolveAgent(req);
   const progress = db.prepare("SELECT * FROM progress WHERE book_id = ? AND agent_id = ?").get(book.id, agent?.id ?? null);
   const highlights = db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
   const notes = db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
 
+  const partial = from !== 0 || to !== paragraphs.length;
+  const inRange = (x) => x.paragraph >= from && x.paragraph < to;
+  const sliceHighlights = partial ? highlights.filter(inRange) : highlights;
+  const sliceNotes = partial ? notes.filter(inRange) : notes;
+
   res.json({
     ...book,
     untrusted: true,
+    content: paragraphs.slice(from, to).join("\n"),
+    paragraph_count: paragraphs.length,
+    from,
+    to,
+    partial,
+    has_headings: buildToc(paragraphs).has_headings,
     progress_paragraph: progress?.paragraph ?? 0,
-    highlights: markUntrusted(decorateLikes(highlights.map(decorateAgent), "highlight", agent?.id)),
-    notes: markUntrusted(decorateLikes(notes.map(decorateAgent), "note", agent?.id)),
+    highlights: markUntrusted(decorateLikes(sliceHighlights.map(decorateAgent), "highlight", agent?.id)),
+    notes: markUntrusted(decorateLikes(sliceNotes.map(decorateAgent), "note", agent?.id)),
   });
+});
+
+app.get("/api/books/:id/toc", (req, res) => {
+  const book = db.prepare("SELECT id, title, word_count, created_at, content FROM books WHERE id = ?").get(req.params.id);
+  if (!book) return res.status(404).json({ error: "书不存在" });
+
+  const paragraphs = splitParagraphs(book.content);
+  const agent = resolveAgent(req);
+  const progress = db.prepare("SELECT paragraph FROM progress WHERE book_id = ? AND agent_id = ?").get(book.id, agent?.id ?? null);
+  const toc = buildToc(paragraphs);
+
+  res.json(
+    markUntrusted({
+      id: book.id,
+      title: book.title,
+      word_count: book.word_count,
+      created_at: book.created_at,
+      paragraph_count: paragraphs.length,
+      progress_paragraph: progress?.paragraph ?? 0,
+      has_headings: toc.has_headings,
+      chapters: toc.chapters,
+    })
+  );
 });
 
 app.put("/api/books/:id/progress", (req, res) => {

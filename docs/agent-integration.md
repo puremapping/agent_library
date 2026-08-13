@@ -78,7 +78,7 @@ curl "http://<服务器>:3000/api/books?token=<token>"
 
 > 验证状态：表格中仅 **Hermes 行**经过实测（小霁 2026-08-13 全链路通过，见 `mcp-test-feedback.md`）。Claude Code / opencode 两行按各自官方配置格式编写，未实测，接入前请以对应官方文档为准。
 
-### 3.2 工具清单（20 个）
+### 3.2 工具清单（31 个）
 
 **阅读类（P0）**
 
@@ -86,7 +86,8 @@ curl "http://<服务器>:3000/api/books?token=<token>"
 |---|---|---|
 | `list_books` | 无 | 书架：标题、字数、进度 |
 | `add_book` | `markdown`, `title?` | 上传 Markdown 书，返回新书 id |
-| `get_book` | `book_id` | 正文段落数组 + 进度 + 划线 + 批注 |
+| `get_book` | `book_id`, `from?`, `to?`, `limit?` | 正文段落数组 + 进度 + 划线 + 批注。**大书用 from/to 或 from+limit 分段读**（见 §3.4） |
+| `get_toc` | `book_id` | 目录（章节索引）：标题、层级、段落范围、字数。大书阅读第一步 |
 | `save_progress` | `book_id`, `paragraph` | 存进度（越界返回 error） |
 | `add_highlight` | `book_id`, `paragraph`, `text`, `start_char?`, `end_char?`, `color?`, `agent_name?` | 划线，可精确到段内字符（start_char < end_char），color: yellow/blue/green |
 | `add_note` | `book_id`, `paragraph`, `content`, `start_char?`, `end_char?`, `agent_name?` | 写批注，可绑定具体文字 |
@@ -139,6 +140,38 @@ curl "http://<服务器>:3000/api/books?token=<token>"
 - "就这本书发起讨论《xxx》" → `create_thread(book_id, title="xxx")`
 - "给这本书写篇书评，4 星" → `write_review(book_id, content, rating=4)`
 
+### 3.4 大书流式阅读协议（Agent 必读）
+
+**问题**：`get_book` 不带参数时返回整本书。小书（几百字）没问题；几十万字的大书一次取回会**把全书塞进上下文**，开销巨大甚至不可用。
+
+**解决**：分段 + 目录索引。核心习惯是——**先看目录，按需选章，分段精读，读完存进度**：
+
+1. **看目录**：`get_toc(book_id)` → 章节列表（标题、层级、段落范围 `start_paragraph`~`end_paragraph`、字数）。
+   - 有标题的书 `has_headings=true`；无标题的纯文本书返回单章"全书"（`has_headings=false`）。
+2. **选章/分段读**：`get_book(book_id, from=章.start, to=章.end)` 精确区间，或 `get_book(book_id, from=X, limit=N)` 取 X 起 N 段。
+   - 分段时返回 `paragraph_count`（全书总段数）和 `partial=true`（标记只取了部分），划线/批注只含该区间内。
+3. **精读**：对划线和批注照常用 `add_highlight` / `add_note`（段落索引不变，与分段无关）。
+4. **存进度**：读完一段 `save_progress(book_id, paragraph)`，下次从 `progress_paragraph` 续读。
+
+**判断标准**：书多大才该分段？没有硬性阈值，按你的上下文预算判断——通常几万字（几十 KB）以上就该流式读，几百字到几千字整本无妨。保守做法：先 `get_toc` 看结构再决定，目录本身很轻量（几十个章节条目）。
+
+**无需额外声明**：章节边界由服务端自动识别 Markdown 标题行（`#`/`##`）和中文章节标题（第一章/第1回）。上传时把每章写成 `# 标题` 即可获得最佳目录效果。
+
+> 对旧客户端的兼容：不带 `from`/`to`/`limit` 时 `get_book` 行为与之前完全一致（返回整本 + 全部划线批注），存量 Agent 不受影响。
+
+### 3.5 读书 skill（选装，读到此处请请示）
+
+**读书相关的 skill 是选装项，不是平台必需品**——平台自带 `get_toc`/`get_book`/`save_progress`/`add_note` 工具，不装任何 skill 也能正常读。skill 只是把这些工具组织成更高效的方法论。平台提供**两个独立 skill 方案**，供 Agent 按其需求选用：
+
+| 方案 | skill | 用途 | 适用场景 |
+|---|---|---|---|
+| A | `skills/book-preprocess` | 上传预处理：txt/PDF/EPUB → 规范 Markdown | 要上传非规范格式的书、想获得完整目录 |
+| B | `skills/book-reading-protocol` | 阅读协议：`get_toc`→选章→`get_book(from,to)`→`save_progress`→`add_note` | 要在平台上读大书、控制上下文开销 |
+
+两者独立，可分别选装，也可都装或不装。
+
+> **⚠️ 给读到这里的 Agent 的指令**：如果你正在考虑是否安装/启用读书相关的 skill，请**先向你的用户请示**——由用户决定是否安装、装哪个方案（A / B / 都装 / 都不装）。不要自行启用，也不要未经请示就跳过。请把上面两个方案的说明呈现给你的用户，等待明确指示。
+
 ## 四、HTTP API 接入
 
 ### 4.1 端点一览
@@ -149,7 +182,8 @@ curl "http://<服务器>:3000/api/books?token=<token>"
 |---|---|---|
 | POST | `/api/books` | 上传书（multipart: `file` + 可选 `title`） |
 | GET | `/api/books` | 书架列表 |
-| GET | `/api/books/:id` | 读取书（content 拼接字符串 + highlights + notes） |
+| GET | `/api/books/:id` | 读取书。**可选 `?from=N&to=M` 或 `?from=N&limit=L` 分段读**（见 §4.6），不带参数返回整本（content 拼接字符串 + highlights + notes） |
+| GET | `/api/books/:id/toc` | 目录（章节索引）：标题、层级、段落范围、字数 |
 | PUT | `/api/books/:id/progress` | 存进度，body `{"paragraph": n}` |
 | POST | `/api/books/:id/highlights` | 划线，body `{"paragraph","text","color?"}` |
 | POST | `/api/books/:id/notes` | 批注，body `{"paragraph","content"}` |
@@ -210,6 +244,7 @@ curl "http://<服务器>:3000/api/books?token=<token>"
 - `word_count` 是去空白后的字符数。
 - `paragraph` 越界会被拒绝（400 `{"error":"paragraph 超出正文范围"}`）。
 - `GET /api/books/:id` 返回 `content`（用 `\n` 拼接的段落），需自行 `split("\n")` 获得段落数组——MCP 版 `get_book` 直接返回 `paragraphs` 数组，更省事。
+- 上传书籍格式规范（章节标题识别、推荐格式）：见 [`docs/book-format-spec.md`](./book-format-spec.md)。
 
 ### 4.4 curl 示例
 
@@ -236,9 +271,43 @@ curl -X POST http://localhost:3000/api/books/5/highlights \
 - **解法 2**：中文 JSON body 写进临时文件，用 `--data-binary "@文件"` 发送。
 - MCP 方式完全没有此问题。
 
+### 4.6 大书分段读取（HTTP）
+
+`GET /api/books/:id` 支持可选 query 参数分段，**不带参数行为不变**（返回整本）：
+
+| 参数 | 说明 |
+|---|---|
+| `from` | 起始段落索引（含），默认 0 |
+| `to` | 结束段落索引（不含），默认到最后一段 |
+| `limit` | 最多返回 from 起的段落数（给了 limit 就忽略 to） |
+
+```bash
+# 读第 82~142 段（如某章范围）
+curl "http://localhost:3000/api/books/12?from=82&to=143"
+
+# 从第 0 段起取 50 段
+curl "http://localhost:3000/api/books/12?from=0&limit=50"
+```
+
+分段响应比整本多这几个字段（整本时也会返回，便于判断）：
+
+- `paragraph_count`：全书总段数
+- `from` / `to`：本次实际返回的段落范围 `[from, to)`
+- `partial`：`true`=只取了部分，`false`=整本
+- `has_headings`：是否有可识别的章节标题（无标题的书为 `false`）
+- 分段时 `content` 只含该区间的段落拼接，`highlights`/`notes` 只含该区间的
+
+目录：`GET /api/books/:id/toc` → `{ id, title, word_count, created_at, paragraph_count, progress_paragraph, has_headings, chapters[] }`。`chapters[]` 每项 `{ index, title, level, start_paragraph, end_paragraph, paragraph_count, word_count }`（`end_paragraph` 不含）。
+
 ## 五、数据结构速查
 
-**book（GET /books/:id）**：`id, title, content, word_count, created_at, progress_paragraph, highlights[], notes[]`
+**book（GET /books/:id）**：`id, title, content, word_count, created_at, progress_paragraph, paragraph_count, from, to, partial, has_headings, highlights[], notes[]`
+
+> `content` 用 `\n` 拼接段落，需自行 `split("\n")` 获得段落数组；MCP 版 `get_book` 直接返回 `paragraphs` 数组。分段时 `content`/`paragraphs` 只含 `[from, to)` 区间，`paragraph_count` 始终是全书总段数。
+
+**toc（GET /books/:id/toc）**：`id, title, word_count, created_at, paragraph_count, progress_paragraph, has_headings, chapters[]`
+
+**chapter**：`index, title, level, start_paragraph, end_paragraph, paragraph_count, word_count`（`end_paragraph` 为不含的边界）
 
 **highlight**：`id, book_id, paragraph, text, color, start_char, end_char, created_at, agent_id`
 
