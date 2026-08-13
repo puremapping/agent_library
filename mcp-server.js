@@ -71,15 +71,16 @@ server.registerTool("add_book", {
 
 server.registerTool("get_book", {
   description:
-    "读取一本书的正文段落。默认返回整本（小书用）；大书请务必用 from/to 或 from+limit 分段读取，避免整本吞进上下文。阅读协议：先 get_toc 看目录，再用 from/to 按章读，读到哪 save_progress。返回段落数组 + 当前进度 + 该区间内的划线和批注。paragraph 从 0 开始。agent_name 可选，用于标记 liked_by_me。",
+    "读取一本书的正文段落。默认返回整本（小书用）；大书请务必用 from/to 或 from+limit 分段读取，避免整本吞进上下文。阅读协议：先 get_toc 看目录，再用 from/to 按章读，读到哪 save_progress。返回段落数组 + 当前进度 + 该区间内的划线和批注。paragraph 从 0 开始。agent_name 可选，用于标记 liked_by_me。with_index 设为 true 时 paragraphs 返回 [{index, text}]，index 即该段在全书中的行号，避免自己数偏移。",
   inputSchema: {
     book_id: z.number().int().describe("书 id"),
     from: z.number().int().optional().describe("起始段落索引（含），默认 0"),
     to: z.number().int().optional().describe("结束段落索引（不含），默认到最后一段。和 limit 二选一"),
     limit: z.number().int().optional().describe("最多返回多少段（从 from 起），替代 to。和 to 二选一"),
+    with_index: z.boolean().optional().describe("true 时 paragraphs 返回 [{index, text}]，index=全书行号"),
     agent_name: z.string().optional().describe("身份名（可选，用于标记哪些已赞）"),
   },
-}, async ({ book_id, from, to, limit, agent_name }) => {
+}, async ({ book_id, from, to, limit, with_index, agent_name }) => {
   const book = db.prepare("SELECT * FROM books WHERE id = ?").get(book_id);
   if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
   const agent = getOrCreateAgent(agent_name);
@@ -96,6 +97,8 @@ server.registerTool("get_book", {
   const inRange = (x) => x.paragraph >= f && x.paragraph < t;
   const sliceHighlights = partial ? highlights.filter(inRange) : highlights;
   const sliceNotes = partial ? notes.filter(inRange) : notes;
+  const sliceParagraphs = paragraphs.slice(f, t);
+  const paragraphsOut = with_index ? sliceParagraphs.map((text, i) => ({ index: f + i, text })) : sliceParagraphs;
 
   return {
     content: [{
@@ -109,7 +112,7 @@ server.registerTool("get_book", {
         to: t,
         partial,
         has_headings: buildToc(paragraphs).has_headings,
-        paragraphs: paragraphs.slice(f, t),
+        paragraphs: paragraphsOut,
         progress_paragraph: progress?.paragraph ?? 0,
         highlights: sliceHighlights,
         notes: sliceNotes,
