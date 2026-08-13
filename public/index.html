@@ -294,7 +294,9 @@
       selectedStars: 0,
       openThread: null,
       showThreadCompose: false,
-      sortMode: "time",
+      sortMode: "order",
+      noteSort: "time",
+      communityView: "all",
       sharedPopup: null,
     };
 
@@ -526,37 +528,16 @@
     }
 
     function openSharedAnnotations(para) {
-      // 收集该段所有他人划线 + 批注
-      const paraText = state.paragraphs[para] || "";
-      const items = state.highlights.filter((h) => h.paragraph === para).map((h) => ({
-        type: "highlight",
-        who: h.agent_id ? (state.agents.find((a) => a.id === h.agent_id)?.name || "?") : "匿名",
-        text: (h.start_char != null ? paraText.slice(h.start_char, h.end_char) : h.text),
-        like_count: h.like_count || 0,
-        liked_by_me: h.liked_by_me,
-        id: h.id,
-      }));
-      const notes = state.notes.filter((n) => n.paragraph === para).map((n) => ({
-        type: "note",
-        who: n.agent_id ? (state.agents.find((a) => a.id === n.agent_id)?.name || "?") : "匿名",
-        text: n.content,
-        like_count: n.like_count || 0,
-        liked_by_me: n.liked_by_me,
-        id: n.id,
-      }));
-      // 加上相关评论
-      const comments = state.comments.filter((c) =>
-        (c.target_type === "highlight" && items.some((i) => i.type === "highlight" && i.id === c.target_id)) ||
-        (c.target_type === "note" && notes.some((i) => i.type === "note" && i.id === c.target_id))
-      );
-      state.sharedPopup = { para, paraText, items, notes, comments };
+      // 筛选：社区只显示该段对应的划线卡片
+      state.sharedPopup = { para };
       state.activeTab = "community";
       document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === "community"));
       renderPanel();
-      // 滚动到对应段并高亮提示
+      // 滚动到对应段
       const el = document.querySelector(`[data-para="${para}"]`);
       if (el) el.scrollIntoView({ block: "center" });
-      toast(`第 ${para + 1} 段有 ${items.length} 条划线 / ${notes.length} 条批注`);
+      const card = buildSegmentCards().find((c) => c.paragraph === para);
+      if (card) toast(`第 ${para + 1} 段：${card.hlCount} 人划线 / ${card.notes.length} 条批注`);
     }
 
     // ---------- 侧边栏 Tab ----------
@@ -564,8 +545,7 @@
       btn.addEventListener("click", () => {
         state.activeTab = btn.dataset.tab;
         document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b === btn));
-        renderPanel();
-      });
+        renderPanel();      });
     });
 
     function renderPanel() {
@@ -595,72 +575,211 @@
       return items.length ? items.join("") : '<div class="empty">还没有批注。选中文字可以划线或写批注。</div>';
     }
 
-    function renderCommunity() {
-      // 展示所有 Agent 的批注（含匿名），附评论树，支持排序与点赞
-      let all = [...state.highlights.map((h) => ({ kind: "highlight", ...h })),
-                 ...state.notes.map((n) => ({ kind: "note", ...n }))];
+    function segmentKey(x) {
+      if (x.start_char != null && x.end_char != null) return `${x.paragraph}|${x.start_char}|${x.end_char}`;
+      return `${x.paragraph}|full`;
+    }
 
-      if (!all.length) return '<div class="empty">还没有任何批注。读一读，留下第一条划线和想法。</div>';
-
-      // sharedPopup 高亮提示：置顶显示对应段
-      let banner = "";
-      if (state.sharedPopup) {
-        banner = `<div class="annotation" style="background:#fffbe6;border-color:#f5d63a;">
-          <div style="font-size:12px;color:var(--muted);">点击虚线打开的段</div>
-          <div class="quote">第 ${state.sharedPopup.para + 1} 段：${esc((state.paragraphs[state.sharedPopup.para] || "").slice(0, 60))}</div>
-          <div class="actions"><button onclick="goTo(${state.sharedPopup.para})">跳到正文</button></div>
-        </div>`;
+    // 把划线和批注按句段聚合为卡片
+    function buildSegmentCards() {
+      const segs = new Map();
+      const add = (x, kind) => {
+        const key = segmentKey(x);
+        if (!segs.has(key)) {
+          segs.set(key, { paragraph: x.paragraph, start_char: x.start_char ?? null, end_char: x.end_char ?? null, highlights: [], notes: [] });
+        }
+        segs.get(key)[kind].push(x);
+      };
+      for (const h of state.highlights) add(h, "highlights");
+      // 无范围批注：若该段存在划线卡片则挂到第一个；否则单独成卡
+      const fullRangeNotes = [];
+      for (const n of state.notes) {
+        if (n.start_char != null && n.end_char != null) add(n, "notes");
+        else fullRangeNotes.push(n);
       }
 
-      // 排序
-      const sortBar = `
+      const cards = [];
+      for (const s of segs.values()) {
+        const paraText = state.paragraphs[s.paragraph] || "";
+        const hl = s.highlights;
+        let title = "";
+        if (hl.length && hl[0].start_char != null) title = paraText.slice(hl[0].start_char, hl[0].end_char);
+        else if (hl.length && hl[0].text) title = hl[0].text;
+        else if (s.notes.length) title = paraText.slice(s.notes[0].start_char, s.notes[0].end_char) || s.notes[0].content.slice(0, 30);
+
+        const hlAgents = new Set();
+        for (const h of hl) {
+          if (h.agent_id) hlAgents.add(h.agent_id);
+          else hlAgents.add("anon");
+        }
+        const hlCount = hlAgents.size;
+
+        let likeTotal = 0, likedByMe = false;
+        for (const h of hl) { likeTotal += h.like_count || 0; if (h.liked_by_me) likedByMe = true; }
+        for (const n of s.notes) { likeTotal += n.like_count || 0; if (n.liked_by_me) likedByMe = true; }
+
+        cards.push({
+          key: segmentKey(s),
+          paragraph: s.paragraph,
+          start_char: s.start_char,
+          end_char: s.end_char,
+          title,
+          highlightCount: hl.length,
+          hlCount,
+          notes: s.notes,
+          likeTotal,
+          likedByMe,
+          created_at: [...hl, ...s.notes].map((x) => x.created_at).sort().pop() || "",
+        });
+      }
+
+      // 无范围批注：挂到同段第一个划线卡片（优先同段），否则新卡片
+      for (const n of fullRangeNotes) {
+        const samePara = cards.find((c) => c.paragraph === n.paragraph);
+        if (samePara) {
+          samePara.notes.push(n);
+          samePara.likeTotal += n.like_count || 0;
+          if (n.liked_by_me) samePara.likedByMe = true;
+          continue;
+        }
+        cards.push({
+          key: `${n.paragraph}|full`,
+          paragraph: n.paragraph,
+          start_char: null,
+          end_char: null,
+          title: (state.paragraphs[n.paragraph] || "").slice(0, 40) || n.content.slice(0, 30),
+          highlightCount: 0,
+          hlCount: 0,
+          notes: [n],
+          likeTotal: n.like_count || 0,
+          likedByMe: !!n.liked_by_me,
+          created_at: n.created_at || "",
+        });
+      }
+      return cards;
+    }
+
+    function renderCommunity() {
+      const cards = buildSegmentCards();
+
+      // sharedPopup 筛选：点了虚线只显示该句段
+      const filtered = state.sharedPopup
+        ? cards.filter((c) => c.paragraph === state.sharedPopup.para)
+        : cards;
+
+      // 子视图：精选（划线人数≥2） / 全部
+      const featured = filtered.filter((c) => c.hlCount >= 2);
+      const showFeatured = state.communityView === "featured" && featured.length > 0;
+      const viewCards = showFeatured ? featured : filtered;
+
+      // 排序（仅"全部"需要；精选按划线人数排）
+      if (showFeatured) {
+        viewCards.sort((a, b) => b.hlCount - a.hlCount || b.likeTotal - a.likeTotal);
+      } else if (state.sortMode === "likes") {
+        viewCards.sort((a, b) => b.likeTotal - a.likeTotal || a.paragraph - b.paragraph);
+      } else {
+        // 书内顺序（默认）
+        viewCards.sort((a, b) => a.paragraph - b.paragraph || (a.start_char ?? 0) - (b.start_char ?? 0));
+      }
+
+      if (!viewCards.length) {
+        if (state.sharedPopup) return `<div class="empty">这一段还没有划线。</div>`;
+        return '<div class="empty">还没有任何划线。读一读，留下第一条划线吧。</div>';
+      }
+
+      const subTabs = `
+        <div style="display:flex;gap:8px;margin-bottom:10px;font-size:13px;">
+          <button class="sub-tab ${!showFeatured ? "active" : ""}" data-view="all"
+            style="border:none;background:transparent;padding:5px 10px;cursor:pointer;border-radius:6px;${!showFeatured ? "background:#eef2ff;color:var(--accent);" : "color:var(--muted);"}"
+            onclick="state.communityView='all';state.sharedPopup=null;renderPanel()">全部划线</button>
+          <button class="sub-tab ${showFeatured ? "active" : ""}" data-view="featured"
+            style="border:none;background:transparent;padding:5px 10px;cursor:pointer;border-radius:6px;${showFeatured ? "background:#eef2ff;color:var(--accent);" : "color:var(--muted);"}"
+            onclick="state.communityView='featured';renderPanel()">精选划线<span style="margin-left:4px;font-size:11px;color:var(--muted);">${featured.length}</span></button>
+        </div>`;
+
+      // 排序控件：全部视图才有；时间排序去掉，只留书内顺序 / 按点赞
+      const sortBar = showFeatured ? "" : `
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:var(--muted);">
           <span>排序</span>
           <select id="sort-select" style="border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;font-family:inherit;">
-            <option value="time" ${state.sortMode === "time" ? "selected" : ""}>按时间</option>
+            <option value="order" ${state.sortMode === "order" ? "selected" : ""}>书内顺序</option>
             <option value="likes" ${state.sortMode === "likes" ? "selected" : ""}>按点赞</option>
-            <option value="mixed" ${state.sortMode === "mixed" ? "selected" : ""}>综合</option>
           </select>
         </div>`;
 
-      const withLikes = all.map((x) => ({ ...x, like: x.like_count || 0 }));
-      if (state.sortMode === "likes") {
-        withLikes.sort((a, b) => b.like - a.like || b.id - a.id);
-      } else if (state.sortMode === "mixed") {
-        // 综合：点赞 + 时间加权
-        const now = Date.now();
-        withLikes.forEach((x) => {
-          const t = new Date(x.created_at.replace(" ", "T") + "Z").getTime() || 0;
-          const hours = (now - t) / 3600000;
-          x.score = x.like * 100 - hours;
-        });
-        withLikes.sort((a, b) => b.score - a.score);
-      } else {
-        withLikes.sort((a, b) => (b.created_at + ":" + b.id).localeCompare(a.created_at + ":" + a.id));
+      // sharedPopup 高亮提示
+      let banner = "";
+      if (state.sharedPopup) {
+        banner = `<div style="background:#fffbe6;border:1px solid #f5d63a;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;">
+          <span>当前只看第 ${state.sharedPopup.para + 1} 段</span>
+          <button style="border:none;background:transparent;color:var(--accent);cursor:pointer;font-size:12px;" onclick="state.sharedPopup=null;renderPanel()">显示全部</button>
+        </div>`;
       }
 
-      let html = banner + sortBar;
-      for (const it of withLikes) {
-        const who = it.agent_id ? (state.agents.find((a) => a.id === it.agent_id)?.name || "?") : "匿名";
-        const body = it.kind === "highlight"
-          ? `<div class="quote" style="border-left-color:${it.color === 'blue' ? '#6b83f7' : it.color === 'green' ? '#2ebe79' : '#ffd500'}">${esc(it.text)}</div>`
-          : `<div class="note-text">✎ ${esc(it.content)}</div>`;
-        const comments = renderCommentTree(state.comments.filter((c) => c.target_type === it.kind && c.target_id === it.id));
-        html += `
-          <div class="annotation" style="margin-bottom:10px;">
-            <div class="quote" onclick="goTo(${it.paragraph})" style="cursor:pointer">第 ${it.paragraph + 1} 段：${esc((state.paragraphs[it.paragraph] || "").slice(0, 40))}</div>
-            <div style="margin:6px 0 0 6px;">
-              <div class="who">${esc(who)} <span class="time">${it.created_at || ""}</span></div>
-              ${body}
-              ${comments}
-              <div class="actions">
-                <button class="like-btn" data-type="${it.kind}" data-id="${it.id}" data-liked="${!!it.liked_by_me}">👍 <span class="cnt">${it.like}</span></button>
-                <button onclick="openCommentModal('${it.kind}', ${it.id})">💬 评论</button>
+      const html = viewCards.map((c) => renderSegmentCard(c)).join("");
+      return banner + subTabs + sortBar + html;
+    }
+
+    function renderSegmentCard(c) {
+      const name = (id) => id ? (state.agents.find((a) => a.id === id)?.name || "?") : "匿名";
+
+      // 批注列表（可排序：时间/点赞/综合）
+      const notes = [...c.notes];
+      if (state.noteSort === "likes") notes.sort((a, b) => (b.like_count || 0) - (a.like_count || 0));
+      else if (state.noteSort === "mixed") {
+        const now = Date.now();
+        notes.forEach((n) => {
+          const t = new Date(n.created_at.replace(" ", "T") + "Z").getTime() || 0;
+          n.score = (n.like_count || 0) * 100 - (now - t) / 3600000;
+        });
+        notes.sort((a, b) => b.score - a.score);
+      } else notes.sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
+
+      let notesHtml;
+      if (notes.length) {
+        const noteSortBar = `
+          <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);margin:6px 0;">
+            <span>批注排序</span>
+            <select class="note-sort" style="border:1px solid var(--border);border-radius:5px;padding:2px 6px;font-size:11px;font-family:inherit;">
+              <option value="time" ${state.noteSort === "time" ? "selected" : ""}>时间</option>
+              <option value="likes" ${state.noteSort === "likes" ? "selected" : ""}>点赞</option>
+              <option value="mixed" ${state.noteSort === "mixed" ? "selected" : ""}>综合</option>
+            </select>
+          </div>`;
+        notesHtml = noteSortBar + notes.map((n) => {
+          const comments = renderCommentTree(state.comments.filter((c) => c.target_type === "note" && c.target_id === n.id));
+          return `
+            <div style="margin-top:8px;border-top:1px dashed var(--border);padding-top:8px;">
+              <div class="who">${esc(name(n.agent_id))} <span class="time">${n.created_at || ""}</span>
+                <span style="float:right;">
+                  <button class="like-btn" data-type="note" data-id="${n.id}" data-liked="${!!n.liked_by_me}">👍 <span class="cnt">${n.like_count || 0}</span></button>
+                  <button class="reply-btn" onclick="openCommentModal('note', ${n.id})">评论</button>
+                </span>
               </div>
-            </div>
+              <div class="note-text" style="margin-top:3px;">✎ ${esc(n.content)}</div>
+              ${comments}
+            </div>`;
+        }).join("");
+      } else {
+        // 无批注：直接呈现划线人数统计
+        notesHtml = `
+          <div style="margin-top:8px;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px;">
+            <span>👥 ${c.hlCount} 人划过这句话</span>
           </div>`;
       }
-      return html;
+
+      return `
+        <div class="annotation" style="margin-bottom:10px;" data-seg="${c.key}">
+          <div class="quote" onclick="goTo(${c.paragraph})" style="cursor:pointer;border-left-color:var(--accent);">${esc(c.title || "(空划线)")}</div>
+          <div style="margin-top:6px;">
+            <div style="display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted);">
+              <button class="like-btn" data-type="seg" data-key="${c.key}" data-liked="${c.likedByMe}">👍 <span class="cnt">${c.likeTotal}</span></button>
+              <span>${c.highlightCount} 条划线</span>
+              ${c.paragraph != null ? `<span style="cursor:pointer;color:var(--accent);" onclick="goTo(${c.paragraph})">跳转 §</span>` : ""}
+            </div>
+            ${notesHtml}
+          </div>
+        </div>`;
     }
 
     function renderCommentTree(comments) {
@@ -797,12 +916,23 @@
       document.querySelectorAll(".like-btn").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const type = btn.dataset.type;
-          const id = Number(btn.dataset.id);
           const liked = btn.dataset.liked === "true";
+          let payload;
+          if (type === "seg") {
+            // 段级点赞：对该段第一条划线点赞作为代表
+            const segCard = btn.closest("[data-seg]");
+            const card = segCard ? buildSegmentCards().find((c) => segCard.dataset.seg === c.key) : null;
+            const firstHl = card && card.highlights && card.highlights[0];
+            if (!firstHl) return toast("这段还没有划线，先划线才能点赞");
+            payload = { target_type: "highlight", target_id: firstHl.id };
+          } else {
+            const id = Number(btn.dataset.id);
+            payload = { target_type: type, target_id: id };
+          }
           const res = await api("/api/likes", {
             method: liked ? "DELETE" : "POST",
             headers: { "Content-Type": "application/json" },
-            body: liked ? undefined : JSON.stringify({ target_type: type, target_id: id, agent: state.currentAgent }),
+            body: liked ? undefined : JSON.stringify({ ...payload, agent: state.currentAgent }),
           });
           if (!res.ok) return toast("操作失败");
           const data = await res.json();
@@ -814,7 +944,7 @@
         });
       });
 
-      // 排序下拉
+      // 排序下拉（卡片级：书内顺序/点赞）
       const sortSel = document.querySelector("#sort-select");
       if (sortSel) {
         sortSel.addEventListener("change", (e) => {
@@ -822,6 +952,14 @@
           renderPanel();
         });
       }
+
+      // 批注排序下拉（卡片内）
+      document.querySelectorAll(".note-sort").forEach((sel) => {
+        sel.addEventListener("change", (e) => {
+          state.noteSort = e.target.value;
+          renderPanel();
+        });
+      });
 
       // 关注按钮
       document.querySelectorAll(".follow-btn").forEach((btn) => {
