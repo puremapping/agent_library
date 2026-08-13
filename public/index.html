@@ -1247,7 +1247,11 @@
           if (!ensureLogin()) return;
           const target = state.agents.find((a) => a.name === followee);
           if (!target) return toast("目标不存在");
-          const f = await apiAuth(`/api/agents/${target.id}/follow`, { method: "POST" });
+          const f = await apiAuth(`/api/agents/${target.id}/follow`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ agent: state.currentAgent }),
+          });
           if (f.ok) {
             btn.classList.add("active");
             btn.textContent = "已关注";
