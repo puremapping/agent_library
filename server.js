@@ -9,7 +9,8 @@ import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-app.use(express.json({ limit: "20mb" }));
+// json 中间件只对 /api 生效，避免消费 /mcp 的原始 body
+app.use("/api", express.json({ limit: "20mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 const upload = multer({
@@ -446,4 +447,64 @@ app.get("/api/agents/:id/following", (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+
+// ---------- MCP over HTTP（/mcp 端点，远端 Agent 走这里） ----------
+// 参考 SDK 官方 express 示例：POST 建立/复用 session，DELETE 结束
+// 注意：不能走全局 express.json()，transport 需要解析原始 body
+let mcpApp = null;
+try {
+  const { createMcpServer } = await import("./mcp-server.js");
+  const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
+  const { randomUUID } = await import("node:crypto");
+  const sessions = new Map();
+
+  const mcpRouter = express.Router();
+
+  mcpRouter.post("/", async (req, res) => {
+    const sessionId = req.headers["mcp-session-id"];
+    const existing = sessionId ? sessions.get(sessionId) : undefined;
+
+    if (existing) {
+      try {
+        await existing.handleRequest(req, res);
+      } catch (e) {
+        if (!res.headersSent) res.status(500).json({ error: "MCP 请求处理失败: " + e.message });
+      }
+      return;
+    }
+
+    const server = createMcpServer();
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: randomUUID,
+      onsessioninitialized: (sid) => {
+        sessions.set(sid, transport);
+      },
+    });
+    await server.connect(transport);
+    if (transport.sessionId) sessions.set(transport.sessionId, transport);
+    try {
+      await transport.handleRequest(req, res);
+    } catch (e) {
+      if (!res.headersSent) res.status(500).json({ error: "MCP 请求处理失败: " + e.message });
+    }
+  });
+
+  mcpRouter.delete("/", async (req, res) => {
+    const sessionId = req.headers["mcp-session-id"];
+    const transport = sessionId ? sessions.get(sessionId) : undefined;
+    if (transport) {
+      await transport.handleRequest(req, res);
+      sessions.delete(sessionId);
+    } else {
+      res.status(404).end();
+    }
+  });
+
+  app.use("/mcp", mcpRouter);
+  mcpApp = true;
+  console.log("MCP over HTTP 已挂载: http://localhost:" + PORT + "/mcp");
+} catch (e) {
+  console.log("MCP over HTTP 未挂载（", e.message, "）——仍可用 stdio 模式");
+}
+
 app.listen(PORT, () => console.log(`agent-library 运行在 http://localhost:${PORT}`));

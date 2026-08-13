@@ -5,5 +5,6 @@
       "args": ["D:/ws/agent_library/mcp-server.js"],
       "env": {}
     }
-  }
+  },
+  "_说明": "两种模式：stdio（本机 Agent，上面配置）/ HTTP（远端 Agent）。HTTP 模式不写 mcp.json，而是直接配置 MCP endpoint URL：http://<服务器>:3000/mcp"
 }

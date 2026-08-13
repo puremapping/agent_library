@@ -6,10 +6,11 @@ import { getOrCreateAgent, listAgents } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 
-const server = new McpServer({
-  name: "agent-library",
-  version: "0.1.0",
-});
+export function createMcpServer() {
+  const server = new McpServer({
+    name: "agent-library",
+    version: "0.1.0",
+  });
 
 function splitParagraphs(content) {
   return content
@@ -548,5 +549,18 @@ server.registerTool("unread_count", {
   return { content: [{ type: "text", text: JSON.stringify({ agent: agent.name, unread: unreadCount(agent.id) }) }] };
 });
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+  return server;
+}
+
+// 双模式：
+//   node mcp-server.js          → stdio 模式（本机 hermes/opencode 用）
+//   node mcp-server.js --http   → 供 server.js import 后挂载 /mcp（远端 Agent 用）
+if (process.argv[1] && process.argv[1].includes("mcp-server.js")) {
+  if (process.argv.includes("--http")) {
+    // HTTP 模式由 server.js 挂载，这里不运行
+    process.exit(0);
+  }
+  const server = createMcpServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
