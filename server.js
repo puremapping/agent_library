@@ -28,6 +28,22 @@ function paragraphWithinRange(bookId, paragraph) {
   return paragraph < splitParagraphs(book.content).length;
 }
 
+function parseCharRange(body) {
+  const { start_char, end_char } = body;
+  if (start_char == null && end_char == null) return { start_char: null, end_char: null };
+  if (!Number.isInteger(start_char) || !Number.isInteger(end_char) || start_char < 0 || end_char <= start_char)
+    return { error: "start_char/end_char 必须是 start_char < end_char 的非负整数" };
+  return { start_char, end_char };
+}
+
+function charRangeWithinParagraph(bookId, paragraph, startChar, endChar) {
+  if (startChar == null) return true;
+  const book = db.prepare("SELECT content FROM books WHERE id = ?").get(bookId);
+  const paras = splitParagraphs(book.content);
+  if (paragraph >= paras.length) return false;
+  return endChar <= paras[paragraph].length;
+}
+
 app.post("/api/books", upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "请上传 .md 文件" });
 
@@ -90,10 +106,15 @@ app.post("/api/books/:id/highlights", (req, res) => {
   if (!paragraphWithinRange(req.params.id, paragraph))
     return res.status(400).json({ error: "paragraph 超出正文范围" });
 
+  const range = parseCharRange(req.body);
+  if (range.error) return res.status(400).json({ error: range.error });
+  if (range.start_char != null && !charRangeWithinParagraph(req.params.id, paragraph, range.start_char, range.end_char))
+    return res.status(400).json({ error: "字符范围超出段落" });
+
   const agent = resolveAgent(req);
   const info = db
-    .prepare("INSERT INTO highlights (book_id, paragraph, text, color, agent_id) VALUES (?, ?, ?, ?, ?)")
-    .run(req.params.id, paragraph, text.trim(), color || "yellow", agent?.id ?? null);
+    .prepare("INSERT INTO highlights (book_id, paragraph, text, color, agent_id, start_char, end_char) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run(req.params.id, paragraph, text.trim(), color || "yellow", agent?.id ?? null, range.start_char, range.end_char);
 
   res.status(201).json(db.prepare("SELECT * FROM highlights WHERE id = ?").get(info.lastInsertRowid));
 });
@@ -105,10 +126,15 @@ app.post("/api/books/:id/notes", (req, res) => {
   if (!paragraphWithinRange(req.params.id, paragraph))
     return res.status(400).json({ error: "paragraph 超出正文范围" });
 
+  const range = parseCharRange(req.body);
+  if (range.error) return res.status(400).json({ error: range.error });
+  if (range.start_char != null && !charRangeWithinParagraph(req.params.id, paragraph, range.start_char, range.end_char))
+    return res.status(400).json({ error: "字符范围超出段落" });
+
   const agent = resolveAgent(req);
   const info = db
-    .prepare("INSERT INTO notes (book_id, paragraph, content, agent_id) VALUES (?, ?, ?, ?)")
-    .run(req.params.id, paragraph, content.trim(), agent?.id ?? null);
+    .prepare("INSERT INTO notes (book_id, paragraph, content, agent_id, start_char, end_char) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(req.params.id, paragraph, content.trim(), agent?.id ?? null, range.start_char, range.end_char);
 
   res.status(201).json(db.prepare("SELECT * FROM notes WHERE id = ?").get(info.lastInsertRowid));
 });

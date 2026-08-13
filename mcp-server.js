@@ -101,42 +101,70 @@ server.registerTool("save_progress", {
 });
 
 server.registerTool("add_highlight", {
-  description: "给某本书的某个段落划一条高亮线。paragraph 从 0 开始；color 可选 yellow/blue/green；agent_name 为身份名（可选，首次出现自动注册）。返回新高亮记录。",
+  description: "给某本书的某个段落划一条高亮线。paragraph 从 0 开始；start_char/end_char 为段内字符偏移（可选，不填则划整段；start_char < end_char）；color 可选 yellow/blue/green；agent_name 为身份名（可选，首次出现自动注册）。返回新高亮记录。",
   inputSchema: {
     book_id: z.number().int().describe("书 id"),
     paragraph: z.number().int().describe("段落索引（0 开始）"),
     text: z.string().describe("被划线的原文文本"),
+    start_char: z.number().int().optional().describe("段内起始字符偏移（含）"),
+    end_char: z.number().int().optional().describe("段内结束字符偏移（不含）"),
     color: z.enum(["yellow", "blue", "green"]).optional().describe("可选，默认 yellow"),
     agent_name: z.string().optional().describe("身份名，如 \"小霁\"（可选）"),
   },
-}, async ({ book_id, paragraph, text, color, agent_name }) => {
+}, async ({ book_id, paragraph, text, start_char, end_char, color, agent_name }) => {
   if (!paragraphWithinRange(book_id, paragraph)) {
     return { content: [{ type: "text", text: JSON.stringify({ error: "paragraph 超出正文范围" }) }] };
   }
+  if ((start_char == null) !== (end_char == null)) {
+    return { content: [{ type: "text", text: JSON.stringify({ error: "start_char/end_char 需成对提供" }) }] };
+  }
+  if (start_char != null && (start_char < 0 || end_char <= start_char)) {
+    return { content: [{ type: "text", text: JSON.stringify({ error: "需 start_char < end_char" }) }] };
+  }
+  if (start_char != null) {
+    const paras = splitParagraphs(db.prepare("SELECT content FROM books WHERE id = ?").get(book_id).content);
+    if (paragraph >= paras.length || end_char > paras[paragraph].length) {
+      return { content: [{ type: "text", text: JSON.stringify({ error: "字符范围超出段落" }) }] };
+    }
+  }
   const agent = getOrCreateAgent(agent_name);
   const info = db
-    .prepare("INSERT INTO highlights (book_id, paragraph, text, color, agent_id) VALUES (?, ?, ?, ?, ?)")
-    .run(book_id, paragraph, text.trim(), color || "yellow", agent?.id ?? null);
+    .prepare("INSERT INTO highlights (book_id, paragraph, text, color, agent_id, start_char, end_char) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run(book_id, paragraph, text.trim(), color || "yellow", agent?.id ?? null, start_char ?? null, end_char ?? null);
   const h = db.prepare("SELECT * FROM highlights WHERE id = ?").get(info.lastInsertRowid);
   return { content: [{ type: "text", text: JSON.stringify({ ...h, agent_name: agent?.name ?? null }) }] };
 });
 
 server.registerTool("add_note", {
-  description: "给某本书的某个段落写一条批注。paragraph 从 0 开始。返回新批注记录。",
+  description: "给某本书的某个段落写一条批注。paragraph 从 0 开始；start_char/end_char 为段内字符偏移（可选，可定位批注所指向的具体文字）；agent_name 为身份名（可选）。返回新批注记录。",
   inputSchema: {
     book_id: z.number().int().describe("书 id"),
     paragraph: z.number().int().describe("段落索引（0 开始）"),
     content: z.string().describe("批注内容"),
+    start_char: z.number().int().optional().describe("段内起始字符偏移（含）"),
+    end_char: z.number().int().optional().describe("段内结束字符偏移（不含）"),
     agent_name: z.string().optional().describe("身份名，如 \"小霁\"（可选）"),
   },
-}, async ({ book_id, paragraph, content, agent_name }) => {
+}, async ({ book_id, paragraph, content, start_char, end_char, agent_name }) => {
   if (!paragraphWithinRange(book_id, paragraph)) {
     return { content: [{ type: "text", text: JSON.stringify({ error: "paragraph 超出正文范围" }) }] };
   }
+  if ((start_char == null) !== (end_char == null)) {
+    return { content: [{ type: "text", text: JSON.stringify({ error: "start_char/end_char 需成对提供" }) }] };
+  }
+  if (start_char != null && (start_char < 0 || end_char <= start_char)) {
+    return { content: [{ type: "text", text: JSON.stringify({ error: "需 start_char < end_char" }) }] };
+  }
+  if (start_char != null) {
+    const paras = splitParagraphs(db.prepare("SELECT content FROM books WHERE id = ?").get(book_id).content);
+    if (paragraph >= paras.length || end_char > paras[paragraph].length) {
+      return { content: [{ type: "text", text: JSON.stringify({ error: "字符范围超出段落" }) }] };
+    }
+  }
   const agent = getOrCreateAgent(agent_name);
   const info = db
-    .prepare("INSERT INTO notes (book_id, paragraph, content, agent_id) VALUES (?, ?, ?, ?)")
-    .run(book_id, paragraph, content.trim(), agent?.id ?? null);
+    .prepare("INSERT INTO notes (book_id, paragraph, content, agent_id, start_char, end_char) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(book_id, paragraph, content.trim(), agent?.id ?? null, start_char ?? null, end_char ?? null);
   const n = db.prepare("SELECT * FROM notes WHERE id = ?").get(info.lastInsertRowid);
   return { content: [{ type: "text", text: JSON.stringify({ ...n, agent_name: agent?.name ?? null }) }] };
 });

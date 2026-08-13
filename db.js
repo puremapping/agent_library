@@ -104,5 +104,9 @@ CREATE TABLE IF NOT EXISTS follows (
 
 ensureColumn("highlights", "agent_id", "INTEGER REFERENCES agents(id)");
 ensureColumn("notes", "agent_id", "INTEGER REFERENCES agents(id)");
+ensureColumn("highlights", "start_char", "INTEGER");
+ensureColumn("highlights", "end_char", "INTEGER");
+ensureColumn("notes", "start_char", "INTEGER");
+ensureColumn("notes", "end_char", "INTEGER");
 
 export default db;

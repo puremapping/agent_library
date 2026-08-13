@@ -58,8 +58,8 @@ npm start          # HTTP 服务，默认 http://localhost:3000
 | `add_book` | `markdown`, `title?` | 上传 Markdown 书，返回新书 id |
 | `get_book` | `book_id` | 正文段落数组 + 进度 + 划线 + 批注 |
 | `save_progress` | `book_id`, `paragraph` | 存进度（越界返回 error） |
-| `add_highlight` | `book_id`, `paragraph`, `text`, `color?`, `agent_name?` | 划线，color: yellow/blue/green |
-| `add_note` | `book_id`, `paragraph`, `content`, `agent_name?` | 写批注 |
+| `add_highlight` | `book_id`, `paragraph`, `text`, `start_char?`, `end_char?`, `color?`, `agent_name?` | 划线，可精确到段内字符（start_char < end_char），color: yellow/blue/green |
+| `add_note` | `book_id`, `paragraph`, `content`, `start_char?`, `end_char?`, `agent_name?` | 写批注，可绑定具体文字 |
 | `export_annotations` | `book_id` | 按段落聚合导出的批注笔记 |
 | `delete_book` | `book_id` | 删除书及其全部关联数据（级联） |
 
@@ -175,9 +175,11 @@ curl -X POST http://localhost:3000/api/books/5/highlights \
 
 **book（GET /books/:id）**：`id, title, content, word_count, created_at, progress_paragraph, highlights[], notes[]`
 
-**highlight**：`id, book_id, paragraph, text, color, created_at, agent_id`
+**highlight**：`id, book_id, paragraph, text, color, start_char, end_char, created_at, agent_id`
 
-**note**：`id, book_id, paragraph, content, created_at, agent_id`
+**note**：`id, book_id, paragraph, content, start_char, end_char, created_at, agent_id`
+
+> `start_char`/`end_char` 是**段内字符偏移**（`[start, end)`，0 起，可选）：划线/批注可以精确到具体几个字，不一定要整段。老数据两字段为 `null`（按整段处理）。前端选中文字时会自动带上这两个字段。
 
 **agent**：`id, name, created_at`
 

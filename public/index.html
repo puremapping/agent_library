@@ -464,10 +464,12 @@
       const marks = groupMarks(state.paragraphs, state.highlights);
       const html = state.paragraphs.map((para, idx) => {
         const cls = state.notes.some((n) => n.paragraph === idx) ? " has-note" : "";
-        let body = marked.parse(para);
         const groups = marks.get(idx);
-        if (groups) {
-          body = groups.map((g) => `<mark class="${g.color}">${marked.parse(g.text)}</mark>`).join("");
+        let body;
+        if (groups && groups.length) {
+          body = groups.map((g) => `<mark class="${g.color}">${esc(g.text)}</mark>`).join("");
+        } else {
+          body = marked.parse(para);
         }
         return `<p data-para="${idx}" class="${cls}">${body}</p>`;
       }).join("");
@@ -478,12 +480,21 @@
       const map = new Map();
       for (const h of highlights) {
         const para = paragraphs[h.paragraph] || "";
-        if (para.indexOf(h.text) === -1) continue;
+        // 优先用字符偏移精确定位
+        let start, text;
+        if (h.start_char != null && h.end_char != null && h.end_char <= para.length) {
+          start = h.start_char;
+          text = para.slice(h.start_char, h.end_char);
+        } else {
+          start = para.indexOf(h.text);
+          text = h.text;
+          if (start === -1) continue;
+        }
         if (!map.has(h.paragraph)) map.set(h.paragraph, []);
-        map.get(h.paragraph).push({ color: h.color, text: h.text });
+        map.get(h.paragraph).push({ color: h.color, text, start });
       }
       for (const [para, marks] of map) {
-        map.set(para, [...marks].sort((a, b) => paragraphs[para].indexOf(a.text) - paragraphs[para].indexOf(b.text)));
+        map.set(para, [...marks].sort((a, b) => a.start - b.start));
       }
       return map;
     }
@@ -797,6 +808,53 @@
     // ---------- 选中 → 划线/批注 ----------
     const popup = $("#popup");
 
+    // 计算选区在段落原始文本中的字符偏移 [start, end)
+    function selectionCharRange(paraEl) {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return null;
+      const range = sel.getRangeAt(0);
+      // 收集段内所有文本节点的累计偏移
+      const textNodes = [];
+      const walker = document.createTreeWalker(paraEl, NodeFilter.SHOW_TEXT);
+      let acc = 0;
+      let node;
+      while ((node = walker.nextNode())) {
+        const len = node.textContent.length;
+        textNodes.push({ node, start: acc, end: acc + len });
+        acc += len;
+      }
+      if (!textNodes.length) return null;
+
+      const offsetOf = (container, offset) => {
+        if (container.nodeType === Node.TEXT_NODE) {
+          const t = textNodes.find((x) => x.node === container);
+          return t ? t.start + offset : null;
+        }
+        return null;
+      };
+
+      // 选区内所有文本节点的累计长度（区间可能跨多个文本节点）
+      let startChar = null, endChar = null;
+      for (const t of textNodes) {
+        if (range.intersectsNode(t.node)) {
+          const s = offsetOf(range.startContainer, range.startOffset);
+          const e = offsetOf(range.endContainer, range.endOffset);
+          let ts, te;
+          if (s != null && range.startContainer === t.node) ts = s;
+          else if (range.startContainer === paraEl && textNodes[0]) ts = 0;
+          if (e != null && range.endContainer === t.node) te = e;
+          else if (range.endContainer === paraEl && textNodes[textNodes.length - 1]) te = acc;
+          // 若该节点完全在选区内，取节点边界
+          if (ts == null) ts = t.start;
+          if (te == null) te = t.end;
+          if (startChar == null || ts < startChar) startChar = ts;
+          if (endChar == null || te > endChar) endChar = te;
+        }
+      }
+      if (startChar == null || endChar == null || endChar <= startChar) return null;
+      return { start: startChar, end: endChar };
+    }
+
     document.addEventListener("mouseup", (e) => {
       if (popup.contains(e.target)) return;
       const sel = window.getSelection();
@@ -804,8 +862,14 @@
       if (!text) { popup.classList.add("hidden"); return; }
       const paraEl = closestPara(sel.anchorNode);
       if (!paraEl) { popup.classList.add("hidden"); return; }
+      const charRange = selectionCharRange(paraEl);
       const rect = sel.getRangeAt(0).getBoundingClientRect();
-      state.popupAnchor = { para: Number(paraEl.dataset.para), text };
+      state.popupAnchor = {
+        para: Number(paraEl.dataset.para),
+        text,
+        start_char: charRange ? charRange.start : null,
+        end_char: charRange ? charRange.end : null,
+      };
       popup.style.left = `${Math.min(rect.left + rect.width / 2 - 90, window.innerWidth - 200)}px`;
       popup.style.top = `${rect.top - 46}px`;
       popup.classList.remove("hidden");
@@ -836,6 +900,8 @@
             paragraph: state.popupAnchor.para,
             text: state.popupAnchor.text,
             color: dot.dataset.color,
+            start_char: state.popupAnchor.start_char,
+            end_char: state.popupAnchor.end_char,
             agent: state.currentAgent,
           }),
         });
@@ -861,7 +927,13 @@
       const res = await api(`/api/books/${state.bookId}/notes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paragraph: state.popupAnchor.para, content, agent: state.currentAgent }),
+        body: JSON.stringify({
+          paragraph: state.popupAnchor.para,
+          content,
+          start_char: state.popupAnchor.start_char,
+          end_char: state.popupAnchor.end_char,
+          agent: state.currentAgent,
+        }),
       });
       if (!res.ok) return toast("保存失败");
       $("#note-modal").classList.add("hidden");
