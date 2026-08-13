@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>agent-library</title>
+  <script src="/vendor/marked.min.js"></script>
+  <style>
+    :root {
+      --bg: #faf9f6;
+      --card: #ffffff;
+      --ink: #2b2b2b;
+      --muted: #8a8a8a;
+      --accent: #4a6cf7;
+      --border: #e8e6e1;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+    .hidden { display: none !important; }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 24px;
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    header h1 { font-size: 18px; font-weight: 600; }
+    header .btn-back { cursor: pointer; color: var(--accent); font-size: 14px; }
+
+    .container { max-width: 860px; margin: 0 auto; padding: 24px 16px 80px; }
+
+    .upload-zone {
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 36px;
+      text-align: center;
+      cursor: pointer;
+      background: var(--card);
+      transition: border-color .2s;
+      margin-bottom: 24px;
+    }
+    .upload-zone:hover { border-color: var(--accent); }
+    .upload-zone input[type="file"] { display: none; }
+    .upload-zone .hint { color: var(--muted); font-size: 13px; margin-top: 8px; }
+
+    .book-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 12px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: box-shadow .15s;
+    }
+    .book-card:hover { box-shadow: 0 2px 10px rgba(0,0,0,.06); }
+    .book-card .title { font-size: 16px; font-weight: 600; }
+    .book-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+    .book-card .progress-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent); flex-shrink: 0;
+    }
+
+    #reader { display: grid; grid-template-columns: 1fr 280px; gap: 24px; }
+    @media (max-width: 800px) { #reader { grid-template-columns: 1fr; } }
+
+    .reading-area {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px 32px;
+      line-height: 1.9;
+      font-size: 16px;
+      min-height: 70vh;
+    }
+    .reading-area h1 { font-size: 24px; margin-bottom: 20px; }
+    .reading-area p { margin-bottom: 1em; position: relative; padding: 2px 0; }
+    .reading-area mark {
+      background: rgba(255, 213, 0, .55);
+      border-radius: 2px;
+      padding: 0 2px;
+      cursor: pointer;
+    }
+    .reading-area mark.blue { background: rgba(74, 108, 247, .28); }
+    .reading-area mark.green { background: rgba(46, 190, 121, .28); }
+    .reading-area p.has-note::after {
+      content: "✎";
+      position: absolute;
+      right: -18px;
+      top: 2px;
+      color: var(--accent);
+      font-size: 12px;
+    }
+
+    #popup {
+      position: fixed;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 6px 20px rgba(0,0,0,.12);
+      padding: 6px;
+      display: flex;
+      gap: 6px;
+      z-index: 100;
+    }
+    #popup button {
+      border: none;
+      background: transparent;
+      padding: 6px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    #popup button:hover { background: #f0f0f0; }
+    #popup .colors { display: flex; gap: 4px; padding: 0 6px 0 2px; align-items: center; }
+    #popup .dot {
+      width: 16px; height: 16px; border-radius: 50%;
+      border: 2px solid rgba(0,0,0,.12);
+      cursor: pointer;
+    }
+
+    .side-panel h3 { font-size: 14px; margin-bottom: 12px; color: var(--muted); font-weight: 600; }
+    .annotation {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+    }
+    .annotation .quote { font-size: 13px; color: var(--ink); border-left: 3px solid rgba(255,213,0,.7); padding-left: 8px; margin-bottom: 6px; }
+    .annotation .note-text { font-size: 13px; color: var(--muted); }
+
+    .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 24px 0; }
+
+    #note-input-wrap {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+    }
+    #note-input {
+      background: var(--card);
+      border-radius: 12px;
+      padding: 20px;
+      width: 440px;
+      max-width: 90vw;
+    }
+    #note-input textarea {
+      width: 100%;
+      height: 120px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 14px;
+      resize: vertical;
+      font-family: inherit;
+    }
+    #note-input .row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px; }
+    #note-input button {
+      border: none;
+      border-radius: 8px;
+      padding: 8px 16px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    #note-input .cancel { background: #f0f0f0; }
+    #note-input .save { background: var(--accent); color: #fff; }
+
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(43,43,43,.9);
+      color: #fff;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      opacity: 0;
+      transition: opacity .25s;
+      pointer-events: none;
+    }
+    #toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="header-title">agent-library</h1>
+    <button id="btn-export" class="btn-back hidden">导出批注</button>
+    <span id="btn-back" class="btn-back hidden">← 返回书架</span>
+  </header>
+
+  <div class="container">
+    <div id="shelf">
+      <div class="upload-zone" id="upload-zone">
+        <div style="font-size:15px;font-weight:600;">上传 Markdown 书籍</div>
+        <div class="hint">支持 .md 文件（拖入或点击选择）</div>
+        <input type="file" id="file-input" accept=".md,.markdown,.txt" />
+      </div>
+      <div id="book-list"></div>
+    </div>
+
+    <div id="reader" class="hidden">
+      <div class="reading-area" id="reading-area"></div>
+      <div class="side-panel">
+        <h3>我的批注（<span id="anno-count">0</span>）</h3>
+        <div id="annotations"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="popup" class="hidden">
+    <div class="colors">
+      <span class="dot" data-color="yellow" style="background:#ffd500;"></span>
+      <span class="dot" data-color="blue" style="background:#6b83f7;"></span>
+      <span class="dot" data-color="green" style="background:#2ebe79;"></span>
+    </div>
+    <button id="btn-note">✎ 批注</button>
+  </div>
+
+  <div id="note-input-wrap" class="hidden">
+    <div id="note-input">
+      <textarea id="note-text" placeholder="写下你的想法…"></textarea>
+      <div class="row">
+        <button class="cancel" id="note-cancel">取消</button>
+        <button class="save" id="note-save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <script>
+    const state = {
+      bookId: null,
+      book: null,
+      paragraphs: [],
+      highlights: [],
+      notes: [],
+      pendingSel: null,
+    };
+
+    const $ = (sel) => document.querySelector(sel);
+
+    function toast(msg) {
+      const t = $("#toast");
+      t.textContent = msg;
+      t.classList.add("show");
+      setTimeout(() => t.classList.remove("show"), 1800);
+    }
+
+    function esc(s) {
+      return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    // ---------- 书架 ----------
+    async function loadShelf() {
+      const res = await fetch("/api/books");
+      const books = await res.json();
+      const list = $("#book-list");
+      if (!books.length) {
+        list.innerHTML = '<div class="empty">还没有书，先上传一本 Markdown 吧</div>';
+        return;
+      }
+      list.innerHTML = books.map((b) => `
+        <div class="book-card" onclick="openBook(${b.id})">
+          <div>
+            <div class="title">${esc(b.title)}</div>
+            <div class="meta">${b.word_count} 字 · 读到第 ${b.progress_paragraph} 段</div>
+          </div>
+          <div class="progress-dot"></div>
+        </div>
+      `).join("");
+    }
+
+    $("#upload-zone").addEventListener("click", () => $("#file-input").click());
+    $("#upload-zone").addEventListener("dragover", (e) => e.preventDefault());
+    $("#upload-zone").addEventListener("drop", (e) => {
+      e.preventDefault();
+      const f = e.dataTransfer.files[0];
+      if (f) uploadBook(f);
+    });
+    $("#file-input").addEventListener("change", (e) => {
+      const f = e.target.files[0];
+      if (f) uploadBook(f);
+    });
+
+    async function uploadBook(file) {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/books", { method: "POST", body: fd });
+      if (!res.ok) return toast("上传失败");
+      const book = await res.json();
+      toast(`已上传《${book.title}》`);
+      loadShelf();
+    }
+
+    // ---------- 阅读 ----------
+    async function openBook(id) {
+      state.bookId = id;
+      const res = await fetch(`/api/books/${id}`);
+      if (!res.ok) return toast("打开失败");
+      state.book = await res.json();
+      state.paragraphs = state.book.content.split("\n");
+      state.highlights = state.book.highlights;
+      state.notes = state.book.notes;
+
+      $("#shelf").classList.add("hidden");
+      $("#reader").classList.remove("hidden");
+      $("#btn-back").classList.remove("hidden");
+      $("#btn-export").classList.remove("hidden");
+      $("#header-title").textContent = state.book.title;
+      document.title = state.book.title;
+
+      renderReading();
+      renderAnnotations();
+
+      setTimeout(() => {
+        const p = state.book.progress_paragraph;
+        if (p > 0) {
+          const el = document.querySelector(`[data-para="${p}"]`);
+          if (el) el.scrollIntoView({ block: "center" });
+        }
+      }, 60);
+    }
+
+    function renderReading() {
+      const area = $("#reading-area");
+      const marks = groupMarks(state.paragraphs, state.highlights);
+
+      const html = state.paragraphs.map((para, idx) => {
+        const cls = state.notes.some((n) => n.paragraph === idx) ? " has-note" : "";
+        const markedHtml = marked.parse(para);
+        let body = markedHtml;
+        const groups = marks.get(idx);
+        if (groups) {
+          body = groups.map((g) => `<mark class="${g.color}">${marked.parse(g.text)}</mark>`).join("");
+        }
+        return `<p data-para="${idx}" class="${cls}">${body}</p>`;
+      }).join("");
+
+      area.innerHTML = `<h1>${esc(state.book.title)}</h1>` + html;
+    }
+
+    function groupMarks(paragraphs, highlights) {
+      const map = new Map();
+      for (const h of highlights) {
+        const para = paragraphs[h.paragraph] || "";
+        const start = para.indexOf(h.text);
+        let mark = { color: h.color, text: h.text };
+        if (start === -1) continue;
+        if (!map.has(h.paragraph)) map.set(h.paragraph, []);
+        map.get(h.paragraph).push(mark);
+      }
+      for (const [para, marks] of map) {
+        const sorted = [...marks].sort((a, b) => paragraphs[para].indexOf(a.text) - paragraphs[para].indexOf(b.text));
+        map.set(para, sorted);
+      }
+      return map;
+    }
+
+    function renderAnnotations() {
+      const all = [...state.highlights, ...state.notes];
+      $("#anno-count").textContent = all.length;
+      const side = $("#annotations");
+      if (!all.length) {
+        side.innerHTML = '<div class="empty">还没有批注</div>';
+        return;
+      }
+      const items = all
+        .map((x) => ({
+          paragraph: x.paragraph,
+          quote: state.highlights.find((h) => h.id === x.id)?.text
+            || state.notes.find((n) => n.id === x.id)?.content,
+          note: state.notes.find((n) => n.paragraph === x.paragraph),
+          isNote: x.notes !== undefined || !state.highlights.some((h) => h.id === x.id),
+        }))
+        .map((x) => {
+          if (x.paragraph === undefined || x.paragraph === null) return null;
+          return x;
+        })
+        .filter(Boolean);
+
+      side.innerHTML = items.map((x, i) => `
+        <div class="annotation" style="cursor:pointer" onclick="goTo(${x.paragraph})">
+          <div class="quote">第 ${x.paragraph + 1} 段：${esc((x.quote || "").slice(0, 40))}</div>
+          ${x.note ? `<div class="note-text">✎ ${esc(x.note.content.slice(0, 60))}</div>` : ""}
+        </div>
+      `).join("");
+    }
+
+    function goTo(p) {
+      const el = document.querySelector(`[data-para="${p}"]`);
+      if (el) el.scrollIntoView({ block: "center" });
+    }
+
+    $("#btn-back").addEventListener("click", () => {
+      $("#reader").classList.add("hidden");
+      $("#shelf").classList.remove("hidden");
+      $("#btn-back").classList.add("hidden");
+      $("#btn-export").classList.add("hidden");
+      $("#header-title").textContent = "agent-library";
+      document.title = "agent-library";
+      loadShelf();
+    });
+
+    // ---------- 滚动进度 ----------
+    let saveTimer = null;
+    $("#reading-area").addEventListener("scroll", saveProgress, true);
+    window.addEventListener("scroll", saveProgress, true);
+
+    function saveProgress() {
+      if (!state.bookId) return;
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(async () => {
+        const paras = document.querySelectorAll(".reading-area p[data-para]");
+        if (!paras.length) return;
+        let current = 0;
+        for (const el of paras) {
+          if (el.getBoundingClientRect().top < window.innerHeight * 0.5) {
+            current = Number(el.dataset.para);
+          }
+        }
+        await fetch(`/api/books/${state.bookId}/progress`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paragraph: current }),
+        });
+      }, 800);
+    }
+
+    // ---------- 选中 → 划线/批注 ----------
+    const popup = $("#popup");
+    let popupAnchor = null;
+
+    document.addEventListener("mouseup", (e) => {
+      if (popup.contains(e.target) || $("#note-input-wrap").contains(e.target)) return;
+      const sel = window.getSelection();
+      const text = sel ? sel.toString().trim() : "";
+      if (!text) { popup.classList.add("hidden"); return; }
+
+      const anchor = sel.anchorNode && sel.anchorNode.parentElement;
+      const paraEl = closestPara(sel.anchorNode);
+      if (!paraEl || !text) { popup.classList.add("hidden"); return; }
+
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      popupAnchor = { para: Number(paraEl.dataset.para), text };
+      popup.style.left = `${rect.left + rect.width / 2 - 90}px`;
+      popup.style.top = `${rect.top - 46}px`;
+      popup.classList.remove("hidden");
+    });
+
+    document.addEventListener("mousedown", (e) => {
+      if (!popup.contains(e.target)) popup.classList.add("hidden");
+    });
+
+    function closestPara(node) {
+      let el = node && node.nodeType === 1 ? node : node?.parentElement;
+      while (el && el !== document.body) {
+        if (el.classList && el.classList.contains("reading-area")) return null;
+        if (el.dataset && el.dataset.para !== undefined) return el;
+        el = el.parentElement;
+      }
+      return null;
+    }
+
+    document.querySelectorAll(".dot").forEach((dot) => {
+      dot.addEventListener("click", async () => {
+        if (!popupAnchor) return;
+        await fetch(`/api/books/${state.bookId}/highlights`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            paragraph: popupAnchor.para,
+            text: popupAnchor.text,
+            color: dot.dataset.color,
+          }),
+        });
+        window.getSelection()?.removeAllRanges();
+        popup.classList.add("hidden");
+        await reloadAnnotations();
+        toast("已划线");
+      });
+    });
+
+    $("#btn-note").addEventListener("click", () => {
+      if (!popupAnchor) return;
+      $("#note-text").value = "";
+      $("#note-input-wrap").classList.remove("hidden");
+      $("#note-text").focus();
+    });
+
+    $("#note-cancel").addEventListener("click", () => {
+      $("#note-input-wrap").classList.add("hidden");
+    });
+
+    $("#note-save").addEventListener("click", async () => {
+      const content = $("#note-text").value.trim();
+      if (!content) return toast("批注不能为空");
+      if (!popupAnchor) return;
+      await fetch(`/api/books/${state.bookId}/notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paragraph: popupAnchor.para, content }),
+      });
+      $("#note-input-wrap").classList.add("hidden");
+      window.getSelection()?.removeAllRanges();
+      await reloadAnnotations();
+      toast("批注已保存");
+    });
+
+    async function reloadAnnotations() {
+      const res = await fetch(`/api/books/${state.bookId}`);
+      const b = await res.json();
+      state.highlights = b.highlights;
+      state.notes = b.notes;
+      renderReading();
+      renderAnnotations();
+    }
+
+    // ---------- 导出 ----------
+    $("#btn-export").addEventListener("click", async () => {
+      const res = await fetch(`/api/books/${state.bookId}/annotations`);
+      if (!res.ok) return toast("导出失败");
+      const data = await res.json();
+
+      let md = `# 《${data.book.title}》批注笔记\n\n`;
+      for (const a of data.annotations) {
+        md += `> ${a.text}\n\n`;
+        for (const h of a.highlights) md += `- [划线${h.color}] ${h.text}\n`;
+        for (const n of a.notes) md += `- [批注] ${n.content}\n`;
+        md += "\n";
+      }
+      if (!data.annotations.length) md += "（暂无批注）\n";
+
+      const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${data.book.title}-批注笔记.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast("已导出");
+    });
+
+    loadShelf();
+  </script>
+</body>
+</html>
