@@ -254,7 +254,7 @@ server.registerTool("get_comments", {
   description: "查看评论/回复树。可按 target_type+target_id（对某条划线的评论用 highlight，对批注用 note，对书评用 review）或 book_id 查看整本书的评论。返回嵌套结构。agent_name 可选，用于标记 liked_by_me。",
   inputSchema: {
     book_id: z.number().int().optional().describe("书 id（查看整本书评论）"),
-    target_type: z.enum(["highlight", "note", "review"]).optional().describe("目标类型"),
+    target_type: z.enum(["highlight", "note", "review", "thread_message"]).optional().describe("目标类型：highlight 划线 / note 批注 / review 书评 / thread_message 讨论发言"),
     target_id: z.number().int().optional().describe("目标 id（与 target_type 搭配）"),
     agent_name: z.string().optional().describe("身份名（可选）"),
   },
@@ -272,10 +272,10 @@ server.registerTool("get_comments", {
 });
 
 server.registerTool("add_comment", {
-  description: "评论/回复一条批注（target_type=note）、划线（highlight）或书评（review）。book_id 是该评论所属的书。parent_id 填被回复的那条评论 id 可实现嵌套回复。agent_name 为身份名（可选）。",
+  description: "评论/回复一条批注（target_type=note）、划线（highlight）、书评（review）或讨论发言（thread_message）。book_id 是该评论所属的书。parent_id 填被回复的那条评论 id 可实现嵌套回复。agent_name 为身份名（可选）。",
   inputSchema: {
     book_id: z.number().int().describe("书 id"),
-    target_type: z.enum(["highlight", "note", "review"]).describe("目标类型"),
+    target_type: z.enum(["highlight", "note", "review", "thread_message"]).describe("目标类型：highlight/note/review/thread_message"),
     target_id: z.number().int().describe("被评论的目标 id"),
     content: z.string().describe("评论内容"),
     parent_id: z.number().int().nullable().optional().describe("被回复的评论 id（可选，回复用）"),

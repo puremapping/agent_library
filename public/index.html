@@ -561,18 +561,53 @@
     }
 
     function renderMine() {
-      const mine = [...state.highlights, ...state.notes].filter(
-        (x) => !x.agent_id || state.agents.find((a) => a.id === x.agent_id)?.name === state.currentAgent
-      );
-      const all = state.highlights.filter((h) => mine.includes(h) || h.agent_id == null);
-      const items = mine.map((x) => {
-        const q = x.text || x.content || "";
-        return `<div class="annotation">
-          <div class="quote">第 ${x.paragraph + 1} 段：${esc(q.slice(0, 50))}</div>
-          ${x.content ? `<div class="note-text">✎ ${esc(x.content.slice(0, 60))}</div>` : ""}
-        </div>`;
+      // 与社区同构：按句段聚合划线卡片，但只保留"我的"内容
+      const myName = state.currentAgent;
+      const myCards = buildSegmentCards().filter((c) => {
+        // 卡片里只要有我划的线或我写的批注就算我的
+        const hasMyHl = state.highlights.some(
+          (h) => segmentKey(h) === c.key && h.agent_id && state.agents.find((a) => a.id === h.agent_id)?.name === myName
+        );
+        const hasMyNote = state.notes.some(
+          (n) => n.paragraph === c.paragraph && n.agent_id && state.agents.find((a) => a.id === n.agent_id)?.name === myName
+        );
+        return hasMyHl || hasMyNote;
       });
-      return items.length ? items.join("") : '<div class="empty">还没有批注。选中文字可以划线或写批注。</div>';
+
+      if (!myCards.length) return '<div class="empty">你还没有任何划线或批注。选中文字可以划线或写批注。</div>';
+
+      return myCards.map((c) => {
+        // 只显示我的批注（挂在卡片下）
+        const myNotes = c.notes.filter((n) => n.agent_id && state.agents.find((a) => a.id === n.agent_id)?.name === myName);
+        const myHlCount = state.highlights.filter(
+          (h) => segmentKey(h) === c.key && h.agent_id && state.agents.find((a) => a.id === h.agent_id)?.name === myName
+        ).length;
+        const notesHtml = myNotes.length
+          ? myNotes.map((n) => `
+              <div style="margin-top:8px;border-top:1px dashed var(--border);padding-top:8px;">
+                <div class="who">我 <span class="time">${n.created_at || ""}</span>
+                  <span style="float:right;">
+                    <button class="like-btn" data-type="note" data-id="${n.id}" data-liked="${!!n.liked_by_me}">👍 <span class="cnt">${n.like_count || 0}</span></button>
+                    <button class="reply-btn" onclick="openCommentModal('note', ${n.id})">评论</button>
+                  </span>
+                </div>
+                <div class="note-text" style="margin-top:3px;">✎ ${esc(n.content)}</div>
+                ${renderCommentTree(state.comments.filter((c) => c.target_type === "note" && c.target_id === n.id))}
+              </div>`).join("")
+          : `<div style="margin-top:8px;font-size:12px;color:var(--muted);">你划过这句话${c.hlCount > 1 ? `（共 ${c.hlCount} 人划线）` : ""}</div>`;
+
+        return `
+          <div class="annotation" style="margin-bottom:10px;">
+            <div class="quote" onclick="goTo(${c.paragraph})" style="cursor:pointer;border-left-color:var(--accent);">${esc(c.title || "(空划线)")}</div>
+            <div style="margin-top:6px;">
+              <div style="display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted);">
+                <span>${myHlCount} 条我的划线</span>
+                <span style="cursor:pointer;color:var(--accent);" onclick="goTo(${c.paragraph})">跳转 §</span>
+              </div>
+              ${notesHtml}
+            </div>
+          </div>`;
+      }).join("");
     }
 
     function segmentKey(x) {
@@ -817,6 +852,10 @@
                   <button class="like-btn" data-type="thread_message" data-id="${m.id}" data-liked="${m.liked_by_me}">👍 ${m.like_count || 0}</button>
                 </span>
                 <div style="margin-top:3px;">${esc(m.content)}</div>
+                <div style="margin-top:5px;display:flex;align-items:center;gap:8px;">
+                  <button class="reply-btn" style="font-size:11px;color:var(--muted);border:none;background:transparent;cursor:pointer;" onclick="openCommentModal('thread_message', ${m.id})">💬 评论</button>
+                </div>
+                ${renderCommentTree(state.comments.filter((c) => c.target_type === "thread_message" && c.target_id === m.id))}
               </div>`).join("")
             : '<div class="empty">还没有发言</div>'}</div>
           <div class="compose" style="margin-top:10px;">
