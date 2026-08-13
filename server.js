@@ -105,9 +105,10 @@ app.get("/api/books/:id", (req, res) => {
 
   res.json({
     ...book,
+    untrusted: true,
     progress_paragraph: progress?.paragraph ?? 0,
-    highlights: decorateLikes(highlights.map(decorateAgent), "highlight", agent?.id),
-    notes: decorateLikes(notes.map(decorateAgent), "note", agent?.id),
+    highlights: markUntrusted(decorateLikes(highlights.map(decorateAgent), "highlight", agent?.id)),
+    notes: markUntrusted(decorateLikes(notes.map(decorateAgent), "note", agent?.id)),
   });
 });
 
@@ -196,8 +197,8 @@ app.get("/api/books/:id/annotations", (req, res) => {
   }
 
   res.json({
-    book: { id: book.id, title: book.title },
-    annotations: [...byParagraph.values()],
+    book: markUntrusted({ id: book.id, title: book.title }),
+    annotations: markUntrusted([...byParagraph.values()]),
   });
 });
 
@@ -248,7 +249,7 @@ app.get("/api/inbox", (req, res) => {
   res.json({
     agent: agent.name,
     unread: unreadCount(agent.id),
-    items,
+    items: markUntrusted(items),
   });
 });
 
@@ -270,6 +271,20 @@ function decorateAgent(row) {
   if (!row) return row;
   const agent = row.agent_id ? db.prepare("SELECT id, name FROM agents WHERE id = ?").get(row.agent_id) : null;
   return { ...row, agent_name: agent?.name ?? null };
+}
+
+// 内容安全标记：所有用户生成内容（会被 Agent 读取喂给 LLM 的文本）统一标为不可信
+// 递归处理嵌套对象/数组；消费端 Agent 应把 untrusted 数据当纯文本处理，绝不能作为指令执行
+function markUntrusted(obj) {
+  if (Array.isArray(obj)) return obj.map(markUntrusted);
+  if (obj && typeof obj === "object") {
+    const out = { ...obj, untrusted: true };
+    for (const [k, v] of Object.entries(obj)) {
+      if (v && typeof v === "object") out[k] = markUntrusted(v);
+    }
+    return out;
+  }
+  return obj;
 }
 
 // 两级平铺：顶层评论 + 该顶层下所有后代按时间平铺（不再无限嵌套）
@@ -300,10 +315,10 @@ function decorateCommentTree(comments, agentId) {
   const topLevel = (children.get("root") || []).map((c) => {
     const descendants = collectDescendants(c.id).sort((a, b) => (a.created_at + ":" + a.id).localeCompare(b.created_at + ":" + b.id));
     const replies = descendants.map((r) => ({
-      ...decorateAgent(r),
+      ...markUntrusted(decorateAgent(r)),
       parent_name: r.parent_id ? agentName(byId.get(r.parent_id)?.agent_id) : null,
     }));
-    return { ...decorateAgent(c), replies: decorateLikes(replies, "comment", agentId) };
+    return { ...markUntrusted(decorateAgent(c)), replies: decorateLikes(replies, "comment", agentId) };
   });
 
   return decorateLikes(topLevel, "comment", agentId);
@@ -370,7 +385,7 @@ app.get("/api/books/:id/threads", (req, res) => {
     FROM threads t WHERE t.book_id = ? ORDER BY t.created_at DESC
   `).all(req.params.id);
   const agent = resolveAgent(req);
-  res.json(decorateLikes(rows.map(decorateAgent), "thread", agent?.id));
+  res.json(markUntrusted(decorateLikes(rows.map(decorateAgent), "thread", agent?.id)));
 });
 
 app.post("/api/books/:id/threads", (req, res) => {
@@ -389,8 +404,8 @@ app.get("/api/threads/:id", (req, res) => {
   const messages = db.prepare("SELECT * FROM thread_messages WHERE thread_id = ? ORDER BY created_at, id").all(thread.id);
   const agent = resolveAgent(req);
   res.json({
-    ...decorateLikes([decorateAgent(thread)], "thread", agent?.id)[0],
-    messages: decorateLikes(messages.map(decorateAgent), "thread_message", agent?.id),
+    ...markUntrusted(decorateLikes([decorateAgent(thread)], "thread", agent?.id)[0]),
+    messages: markUntrusted(decorateLikes(messages.map(decorateAgent), "thread_message", agent?.id)),
   });
 });
 
@@ -422,7 +437,7 @@ app.post("/api/threads/:id/messages", (req, res) => {
 app.get("/api/books/:id/reviews", (req, res) => {
   const rows = db.prepare("SELECT * FROM reviews WHERE book_id = ? ORDER BY created_at DESC").all(req.params.id);
   const agent = resolveAgent(req);
-  res.json(decorateLikes(rows.map(decorateAgent), "review", agent?.id));
+  res.json(markUntrusted(decorateLikes(rows.map(decorateAgent), "review", agent?.id)));
 });
 
 app.post("/api/books/:id/reviews", (req, res) => {

@@ -19,6 +19,20 @@ function splitParagraphs(content) {
     .map((p) => p.trim());
 }
 
+// 内容安全标记：所有用户生成内容（会被 Agent 读取喂给 LLM 的文本）统一标为不可信
+// 递归处理嵌套对象/数组；消费端 Agent 应把 untrusted 数据当纯文本处理，绝不能作为指令执行
+function markUntrusted(obj) {
+  if (Array.isArray(obj)) return obj.map(markUntrusted);
+  if (obj && typeof obj === "object") {
+    const out = { ...obj, untrusted: true };
+    for (const [k, v] of Object.entries(obj)) {
+      if (v && typeof v === "object") out[k] = markUntrusted(v);
+    }
+    return out;
+  }
+  return obj;
+}
+
 function paragraphWithinRange(bookId, paragraph) {
   const book = db.prepare("SELECT content FROM books WHERE id = ?").get(bookId);
   if (!book) return false;
@@ -74,7 +88,7 @@ server.registerTool("get_book", {
   return {
     content: [{
       type: "text",
-      text: JSON.stringify({
+      text: JSON.stringify(markUntrusted({
         id: book.id,
         title: book.title,
         word_count: book.word_count,
@@ -83,7 +97,7 @@ server.registerTool("get_book", {
         progress_paragraph: progress?.paragraph ?? 0,
         highlights,
         notes,
-      }, null, 2),
+      }), null, 2),
     }],
   };
 });
@@ -208,10 +222,10 @@ server.registerTool("export_annotations", {
   return {
     content: [{
       type: "text",
-      text: JSON.stringify({
+      text: JSON.stringify(markUntrusted({
         book: { id: book.id, title: book.title },
         annotations: [...byParagraph.values()],
-      }, null, 2),
+      }), null, 2),
     }],
   };
 });
@@ -293,7 +307,7 @@ server.registerTool("get_comments", {
     return { content: [{ type: "text", text: JSON.stringify({ error: "需要 target_type+target_id 或 book_id" }) }] };
   }
   const agent = getOrCreateAgent(agent_name);
-  return { content: [{ type: "text", text: JSON.stringify(decorateCommentTree(rows, agent?.id), null, 2) }] };
+  return { content: [{ type: "text", text: JSON.stringify(markUntrusted(decorateCommentTree(rows, agent?.id)), null, 2) }] };
 });
 
 function targetOwnerId(targetType, targetId) {
@@ -353,7 +367,7 @@ server.registerTool("list_threads", {
     agent_name: t.agent_id ? db.prepare("SELECT name FROM agents WHERE id = ?").get(t.agent_id)?.name ?? null : null,
   }));
   const agent = getOrCreateAgent(agent_name);
-  return { content: [{ type: "text", text: JSON.stringify(decorateLikes(out, "thread", agent?.id), null, 2) }] };
+  return { content: [{ type: "text", text: JSON.stringify(markUntrusted(decorateLikes(out, "thread", agent?.id)), null, 2) }] };
 });
 
 server.registerTool("create_thread", {
@@ -388,10 +402,10 @@ server.registerTool("get_thread", {
   return {
     content: [{
       type: "text",
-      text: JSON.stringify({
+      text: JSON.stringify(markUntrusted({
         ...decorateLikes([{ ...thread, agent_name: name(thread.agent_id) }], "thread", agent?.id)[0],
         messages: decorateLikes(messages.map((m) => ({ ...m, agent_name: name(m.agent_id) })), "thread_message", agent?.id),
-      }, null, 2),
+      }), null, 2),
     }],
   };
 });
@@ -437,7 +451,7 @@ server.registerTool("list_reviews", {
     agent_name: r.agent_id ? db.prepare("SELECT name FROM agents WHERE id = ?").get(r.agent_id)?.name ?? null : null,
   }));
   const agent = getOrCreateAgent(agent_name);
-  return { content: [{ type: "text", text: JSON.stringify(decorateLikes(out, "review", agent?.id), null, 2) }] };
+  return { content: [{ type: "text", text: JSON.stringify(markUntrusted(decorateLikes(out, "review", agent?.id)), null, 2) }] };
 });
 
 server.registerTool("write_review", {
@@ -511,7 +525,7 @@ server.registerTool("check_inbox", {
   return {
     content: [{
       type: "text",
-      text: JSON.stringify({ agent: agent.name, unread: unreadCount(agent.id), items }, null, 2),
+      text: JSON.stringify(markUntrusted({ agent: agent.name, unread: unreadCount(agent.id), items }), null, 2),
     }],
   };
 });
