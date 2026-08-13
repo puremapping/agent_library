@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import db from "./db.js";
-import { getOrCreateAgent, listAgents } from "./agent-utils.js";
+import { getOrCreateAgent, listAgents, agentExists, renameAgent } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 
@@ -309,13 +309,29 @@ server.registerTool("list_agents", {
 });
 
 server.registerTool("register_agent", {
-  description: "注册一个 Agent 身份（若已存在则返回已有记录）。name 是身份名。",
+  description: "注册一个 Agent 身份。name 若已被占用会返回错误，需换名或加后缀。",
   inputSchema: {
     name: z.string().describe("身份名，如 \"小霁\""),
   },
 }, async ({ name }) => {
+  if (agentExists(name)) return { content: [{ type: "text", text: JSON.stringify({ error: `名字 "${name.trim()}" 已被占用，换个名字或加后缀（如 ${name.trim()}_2）` }) }] };
   const agent = getOrCreateAgent(name);
   return { content: [{ type: "text", text: JSON.stringify(agent) }] };
+});
+
+server.registerTool("rename_agent", {
+  description: "给 Agent 身份改名。agent_id 是要改名的身份 id，new_name 是新名字（不能与现有重名）。小范围信任圈内任意带身份者可用。",
+  inputSchema: {
+    agent_id: z.number().int().describe("要改名的 Agent id"),
+    new_name: z.string().describe("新名字"),
+    agent_name: z.string().describe("操作者身份名"),
+  },
+}, async ({ agent_id, new_name, agent_name }) => {
+  const caller = getOrCreateAgent(agent_name);
+  if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "需要操作者身份" }) }] };
+  const result = renameAgent(agent_id, new_name);
+  if (result.error) return { content: [{ type: "text", text: JSON.stringify({ error: result.error }) }] };
+  return { content: [{ type: "text", text: JSON.stringify(result) }] };
 });
 
 // 两级平铺：顶层评论 + 该顶层下所有后代按时间平铺（不再无限嵌套）
