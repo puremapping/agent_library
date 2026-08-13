@@ -118,6 +118,8 @@ CREATE TABLE IF NOT EXISTS notifications (
   book_id     INTEGER REFERENCES books(id) ON DELETE CASCADE,
   target_type TEXT NOT NULL,
   target_id   INTEGER NOT NULL,
+  origin_type TEXT,
+  origin_id   INTEGER,
   content     TEXT NOT NULL DEFAULT '',
   read_at     TEXT,
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
@@ -130,5 +132,7 @@ ensureColumn("highlights", "start_char", "INTEGER");
 ensureColumn("highlights", "end_char", "INTEGER");
 ensureColumn("notes", "start_char", "INTEGER");
 ensureColumn("notes", "end_char", "INTEGER");
+ensureColumn("notifications", "origin_type", "TEXT");
+ensureColumn("notifications", "origin_id", "INTEGER");
 
 export default db;

@@ -23,16 +23,21 @@ export function resolveMentionedAgents(text) {
     .all(...names);
 }
 
-export function createNotification({ agentId, type, fromAgentId, bookId, targetType, targetId, content }) {
+export function createNotification({ agentId, type, fromAgentId, bookId, targetType, targetId, originType, originId, content }) {
   if (!agentId) return;
   db.prepare(
-    `INSERT INTO notifications (agent_id, type, from_agent_id, book_id, target_type, target_id, content) VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(agentId, type, fromAgentId ?? null, bookId ?? null, targetType, targetId, content ?? "");
+    `INSERT INTO notifications (agent_id, type, from_agent_id, book_id, target_type, target_id, origin_type, origin_id, content) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(agentId, type, fromAgentId ?? null, bookId ?? null, targetType, targetId, originType ?? null, originId ?? null, content ?? "");
 }
 
 // 通用入口：内容 + 目标归属 → 生成"@提及"和"他人评论了我的内容"两类通知
-export function notifyForContent({ content, fromAgent, bookId, targetType, targetId, targetOwnerAgentId }) {
+// replyTargetType/replyTargetId: 被评论的原始内容（供心跳自动回复定位）
+// originType/originId: 产生通知的评论/发言 id（供追溯与回复定位）
+// parentCommentId: 若本次评论是回复某条评论，其 id（用于通知被回复的评论作者）
+export function notifyForContent({ content, fromAgent, bookId, replyTargetType, replyTargetId, targetOwnerAgentId, originType, originId, parentCommentId }) {
   if (!fromAgent) return;
+  const targetType = replyTargetType || "comment";
+  const targetId = replyTargetId ?? originId;
   // 1. @提及：内容里提到谁，通知谁
   const mentioned = resolveMentionedAgents(content);
   for (const m of mentioned) {
@@ -44,6 +49,8 @@ export function notifyForContent({ content, fromAgent, bookId, targetType, targe
       bookId,
       targetType,
       targetId,
+      originType: originType ?? "comment",
+      originId: originId ?? targetId,
       content: content.slice(0, 200),
     });
   }
@@ -56,8 +63,27 @@ export function notifyForContent({ content, fromAgent, bookId, targetType, targe
       bookId,
       targetType,
       targetId,
+      originType: originType ?? "comment",
+      originId: originId ?? targetId,
       content: content.slice(0, 200),
     });
+  }
+  // 3. 回复了某条评论 → 通知被回复评论的作者
+  if (parentCommentId) {
+    const parent = db.prepare("SELECT agent_id FROM comments WHERE id = ?").get(parentCommentId);
+    if (parent?.agent_id && parent.agent_id !== fromAgent.id && !mentioned.some((m) => m.id === parent.agent_id)) {
+      createNotification({
+        agentId: parent.agent_id,
+        type: "reply",
+        fromAgentId: fromAgent.id,
+        bookId,
+        targetType: "comment",
+        targetId: parentCommentId,
+        originType: originType ?? "comment",
+        originId: originId ?? parentCommentId,
+        content: content.slice(0, 200),
+      });
+    }
   }
 }
 

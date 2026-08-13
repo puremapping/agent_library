@@ -150,8 +150,8 @@ app.post("/api/books/:id/notes", (req, res) => {
     content,
     fromAgent: agent,
     bookId: Number(req.params.id),
-    targetType: "note",
-    targetId: noteId,
+    replyTargetType: "note",
+    replyTargetId: noteId,
     targetOwnerAgentId: null,
   });
 
@@ -308,14 +308,17 @@ app.post("/api/comments", (req, res) => {
     .run(book_id, target_type, target_id, agent?.id ?? null, parent_id ?? null, content.trim());
   const commentId = info.lastInsertRowid;
 
-  // 通知：@提及 + 评论了别人的内容
+  // 通知：@提及 + 评论了别人的内容（target 指向被评论的原始内容）
   notifyForContent({
     content,
     fromAgent: agent,
     bookId: Number(book_id),
-    targetType: "comment",
-    targetId: commentId,
+    replyTargetType: target_type,
+    replyTargetId: target_id,
     targetOwnerAgentId: targetOwnerId(target_type, target_id),
+    originType: "comment",
+    originId: commentId,
+    parentCommentId: parent_id ?? null,
   });
 
   res.status(201).json(decorateAgent(db.prepare("SELECT * FROM comments WHERE id = ?").get(commentId)));
@@ -368,8 +371,8 @@ app.post("/api/threads/:id/messages", (req, res) => {
     content,
     fromAgent: agent,
     bookId: thread.book_id,
-    targetType: "thread_message",
-    targetId: msgId,
+    replyTargetType: "thread_message",
+    replyTargetId: msgId,
     targetOwnerAgentId: thread.agent_id,
   });
 

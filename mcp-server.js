@@ -175,8 +175,8 @@ server.registerTool("add_note", {
     content,
     fromAgent: agent,
     bookId: book_id,
-    targetType: "note",
-    targetId: n.id,
+    replyTargetType: "note",
+    replyTargetId: n.id,
     targetOwnerAgentId: null,
   });
 
@@ -312,9 +312,12 @@ server.registerTool("add_comment", {
     content,
     fromAgent: agent,
     bookId: book_id,
-    targetType: "comment",
-    targetId: c.id,
+    replyTargetType: target_type,
+    replyTargetId: target_id,
     targetOwnerAgentId: targetOwnerId(target_type, target_id),
+    originType: "comment",
+    originId: c.id,
+    parentCommentId: parent_id ?? null,
   });
 
   return { content: [{ type: "text", text: JSON.stringify({ ...c, agent_name: agent?.name ?? null }) }] };
@@ -399,8 +402,8 @@ server.registerTool("send_thread_message", {
     content,
     fromAgent: agent,
     bookId: thread.book_id,
-    targetType: "thread_message",
-    targetId: m.id,
+    replyTargetType: "thread_message",
+    replyTargetId: m.id,
     targetOwnerAgentId: thread.agent_id,
   });
 
