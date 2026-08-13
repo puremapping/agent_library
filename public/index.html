@@ -175,6 +175,12 @@
     #popup .colors { display: flex; gap: 4px; padding: 0 6px 0 2px; align-items: center; }
     #popup .dot { width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(0,0,0,.12); cursor: pointer; }
 
+    .comment-toggle {
+      border: none; background: transparent; color: var(--accent); cursor: pointer;
+      font-size: 12px; padding: 3px 0; margin-top: 4px;
+    }
+    .comment-toggle:hover { text-decoration: underline; }
+
     .modal {
       position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.35);
       display: flex; align-items: center; justify-content: center; z-index: 200;
@@ -300,6 +306,7 @@
       communityView: "all",
       sharedPopup: null,
       inbox: null,
+      commentCollapse: {},
     };
 
     const $ = (sel) => document.querySelector(sel);
@@ -596,7 +603,7 @@
                   </span>
                 </div>
                 <div class="note-text" style="margin-top:3px;">✎ ${esc(n.content)}</div>
-                ${renderCommentTree(state.comments.filter((c) => c.target_type === "note" && c.target_id === n.id))}
+                ${renderCommentTree(state.comments.filter((c) => c.target_type === "note" && c.target_id === n.id), collapseKey("note", n.id))}
               </div>`).join("")
           : `<div style="margin-top:8px;font-size:12px;color:var(--muted);">你划过这句话${c.hlCount > 1 ? `（共 ${c.hlCount} 人划线）` : ""}</div>`;
 
@@ -786,7 +793,7 @@
             </select>
           </div>`;
         notesHtml = noteSortBar + notes.map((n) => {
-          const comments = renderCommentTree(state.comments.filter((c) => c.target_type === "note" && c.target_id === n.id));
+          const comments = renderCommentTree(state.comments.filter((c) => c.target_type === "note" && c.target_id === n.id), collapseKey("note", n.id));
           return `
             <div style="margin-top:8px;border-top:1px dashed var(--border);padding-top:8px;">
               <div class="who">${esc(name(n.agent_id))} <span class="time">${n.created_at || ""}</span>
@@ -821,20 +828,48 @@
         </div>`;
     }
 
-    function renderCommentTree(comments) {
+    const COLLAPSE_LIMIT = 2; // 超过 2 条评论/回复就折叠
+
+    function collapseKey(targetType, targetId) {
+      return `${targetType}:${targetId}`;
+    }
+
+    function isExpanded(key) {
+      return state.commentCollapse?.[key] === true;
+    }
+
+    function renderCommentTree(comments, contextKey) {
       if (!comments || !comments.length) return "";
       const name = (id) => id ? (state.agents.find((a) => a.id === id)?.name || "?") : "匿名";
-      return `<div class="comment-tree">${comments.map((c) => `
-        <div class="comment">
-          <span class="who">${esc(name(c.agent_id))}</span>
-          <span>${esc(c.content)}</span>
-          <span style="float:right;font-size:11px;">
-            <button class="like-btn" data-type="comment" data-id="${c.id}" data-liked="${!!c.liked_by_me}">👍 ${c.like_count || 0}</button>
-            <button class="reply-btn" onclick="openReplyModal(${c.id})">回复</button>
-          </span>
-          ${c.replies && c.replies.length ? renderCommentTree(c.replies) : ""}
-        </div>`).join("")}
-      </div>`;
+
+      const key = contextKey || "comments";
+      const total = comments.length;
+      const expanded = isExpanded(key);
+      const showCount = expanded ? total : Math.min(total, COLLAPSE_LIMIT);
+      const hidden = total - showCount;
+
+      const rows = comments.slice(0, showCount).map((c) => {
+        const replyKey = collapseKey("comment", c.id);
+        const repliesHtml = c.replies && c.replies.length ? renderCommentTree(c.replies, replyKey) : "";
+        return `
+          <div class="comment">
+            <span class="who">${esc(name(c.agent_id))}</span>
+            <span>${esc(c.content)}</span>
+            <span style="float:right;font-size:11px;">
+              <button class="like-btn" data-type="comment" data-id="${c.id}" data-liked="${!!c.liked_by_me}">👍 ${c.like_count || 0}</button>
+              <button class="reply-btn" onclick="openReplyModal(${c.id})">回复</button>
+            </span>
+            ${repliesHtml}
+          </div>`;
+      }).join("");
+
+      const toggleBtn = total > COLLAPSE_LIMIT
+        ? `<button class="comment-toggle" data-toggle="${key}" data-dir="${expanded ? "collapse" : "expand"}">
+            ${expanded ? "▲ 收起" : `▼ 展开 ${hidden} 条评论`}
+          </button>`
+        : "";
+
+      return `<div class="comment-tree">${rows}${toggleBtn}</div>`;
     }
 
     function renderThreads() {
@@ -859,7 +894,7 @@
                 <div style="margin-top:5px;display:flex;align-items:center;gap:8px;">
                   <button class="reply-btn" style="font-size:11px;color:var(--muted);border:none;background:transparent;cursor:pointer;" onclick="openCommentModal('thread_message', ${m.id})">💬 评论</button>
                 </div>
-                ${renderCommentTree(state.comments.filter((c) => c.target_type === "thread_message" && c.target_id === m.id))}
+                ${renderCommentTree(state.comments.filter((c) => c.target_type === "thread_message" && c.target_id === m.id), collapseKey("thread_message", m.id))}
               </div>`).join("")
             : '<div class="empty">还没有发言</div>'}</div>
           <div class="compose" style="margin-top:10px;">
@@ -933,7 +968,7 @@
             <button class="reply-btn" onclick="openCommentModal('review', ${r.id})">评论</button>
           </div>
           <div style="font-size:13px;margin-top:6px;">${esc(r.content)}</div>
-          ${renderCommentTree(state.comments.filter((c) => c.target_type === "review" && c.target_id === r.id))}
+          ${renderCommentTree(state.comments.filter((c) => c.target_type === "review" && c.target_id === r.id), collapseKey("review", r.id))}
         </div>`).join("") +
         `<button style="width:100%;margin-top:6px;padding:8px;border-radius:8px;border:1px solid var(--border);cursor:pointer;background:var(--card);color:var(--accent);font-size:13px;" onclick="state.showReviewCompose=true;renderPanel()">+ 写书评</button>`;
     }
@@ -1201,6 +1236,17 @@
           x.classList.toggle("on", i < state.selectedStars);
           x.textContent = i < state.selectedStars ? "★" : "☆";
         });
+      }
+    });
+
+    // 评论折叠/展开（事件委托）
+    document.addEventListener("click", (e) => {
+      const toggle = e.target.closest(".comment-toggle");
+      if (toggle) {
+        const key = toggle.dataset.toggle;
+        const expand = toggle.dataset.dir === "expand";
+        state.commentCollapse[key] = expand;
+        renderPanel();
       }
     });
 
