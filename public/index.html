@@ -90,7 +90,7 @@
     .reading-area mark.green { background: rgba(46, 190, 121, .28); }
     .reading-area mark.others {
       background: transparent;
-      border-bottom: 2px dashed var(--muted);
+      border-top: 2px dashed var(--muted);  /* 灰虚线在上方，与红虚线(下方)错位 */
       border-radius: 0;
       padding: 0 1px;
       cursor: pointer;
@@ -98,7 +98,7 @@
     .reading-area mark.others:hover { background: rgba(138, 138, 138, .15); }
     .reading-area mark.note-only {
       background: transparent;
-      border-bottom: 2px dashed #e05b5b;
+      border-bottom: 2px dashed #e05b5b;   /* 红虚线在下方，与灰虚线(上方)错位 */
       border-radius: 0;
       padding: 0 1px;
       cursor: pointer;
@@ -586,32 +586,41 @@
       const marks = groupMarks(state.paragraphs, state.highlights);
       const html = state.paragraphs.map((para, idx) => {
         const cls = state.notes.some((n) => n.paragraph === idx) ? " has-note" : "";
-        const groups = marks.get(idx);
-        let body;
-        if (groups && groups.length) {
-          body = groups.map((g) => {
-            // 自己的划线显示实线 + 自己的颜色；他人的显示虚线可点击
-            const isMine = g.agent_id && state.agents.find((a) => a.id === g.agent_id)?.name === state.currentAgent;
-            if (g.isGroup) {
-              // 多人划同句：自己实线自己的颜色，其余虚线
-              const myPart = g.items.find((x) => x.agent_id && state.agents.find((a) => a.id === x.agent_id)?.name === state.currentAgent);
-              const others = g.items.filter((x) => x !== myPart);
-              let inner = "";
-              if (myPart) inner += `<mark class="${myPart.color} solid" data-para="${idx}" data-hl="${g.highlightId || ''}">${esc(myPart.text)}</mark>`;
-              if (others.length) inner += `<mark class="others dashed" data-para="${idx}" data-shared="1" title="点击查看大家的批注">${esc(g.text)}</mark>`;
-              return inner;
-            }
-            if (g.isMine) return `<mark class="${g.color} solid" data-para="${idx}" data-hl="${g.highlightId || ''}">${esc(g.text)}</mark>`;
-            return `<mark class="others dashed" data-para="${idx}" data-shared="1" title="点击查看大家的批注">${esc(g.text)}</mark>`;
-          }).join("");
-        } else {
-          // 纯文本段落：转义显示，避免 marked.parse 产生嵌套 <p> 破坏 data-para 结构
-          body = esc(para);
-          // 只批注不划线：整段加红色虚线标记，点击弹出批注
-          const hasNote = state.notes.some((n) => n.paragraph === idx);
-          if (hasNote) {
-            body = `<mark class="note-only dashed" data-para="${idx}" data-note-only="1" title="点击查看批注">${body}</mark>`;
+        const layer = marks.get(idx) || { mine: [], shared: [] };
+        let body = esc(para);
+
+        // 三层渲染：我的划线(彩色实线) → 我的批注(红色虚线) → 多人划线(灰色虚线，最上层优先点击)
+        const parts = [];
+        // 1. 我的划线（彩色实线）
+        for (const m of layer.mine) {
+          parts.push({ start: m.start, end: m.end, html: `<mark class="${m.color} solid" data-para="${idx}" data-hl="${m.highlightId}">${esc(m.text)}</mark>` });
+        }
+        // 2. 我的批注 → 红色虚线（note 无 start_char 时整段）
+        const myNotes = state.notes.filter((n) => n.paragraph === idx && n.agent_id && state.agents.find((a) => a.id === n.agent_id)?.name === state.currentAgent);
+        for (const n of myNotes) {
+          if (n.start_char != null && n.end_char != null && n.end_char <= para.length) {
+            parts.push({ start: n.start_char, end: n.end_char, html: `<mark class="note-only dashed" data-para="${idx}" data-note-only="1">${esc(para.slice(n.start_char, n.end_char))}</mark>` });
+          } else {
+            parts.push({ start: 0, end: para.length, html: `<mark class="note-only dashed" data-para="${idx}" data-note-only="1">${esc(para)}</mark>` });
           }
+        }
+        // 3. 多人划线 → 灰色虚线（渲染在最上层，交叉时优先被点击）
+        for (const s of layer.shared) {
+          parts.push({ start: s.start, end: s.end, html: `<mark class="others shared" data-para="${idx}" data-shared-id="${s.highlightIds.join(",")}" data-shared="1" title="多人划线·点击查看社区">${esc(s.text)}</mark>` });
+        }
+
+        if (parts.length) {
+          // 按 start 排序，用字符串切片拼接，保证不重叠丢失
+          parts.sort((a, b) => a.start - b.start || a.end - b.end);
+          let cursor = 0;
+          let out = "";
+          for (const p of parts) {
+            if (p.start > cursor) out += esc(para.slice(cursor, p.start));
+            out += p.html;
+            cursor = Math.max(cursor, p.end);
+          }
+          if (cursor < para.length) out += esc(para.slice(cursor));
+          body = out;
         }
         return `<p data-para="${idx}" class="${cls}">${body}</p>`;
       }).join("");
@@ -619,8 +628,12 @@
       bindMarkClicks();
     }
 
+    // 分层划线渲染：
+    //   mine   → 我的划线（彩色实线，点击→我的批注筛选）
+    //   shared → ≥2 人划线的句段（灰色虚线，重叠时取人数最多的范围，点击→社区筛选所有交叉的）
+    //   notes  → 我的批注（红色虚线，点击→我的批注筛选）
     function groupMarks(paragraphs, highlights) {
-      const map = new Map();
+      const byPara = new Map();
       for (const h of highlights) {
         const para = paragraphs[h.paragraph] || "";
         let start, text, end;
@@ -634,36 +647,69 @@
           if (start === -1) continue;
           end = start + h.text.length;
         }
-        if (!map.has(h.paragraph)) map.set(h.paragraph, []);
-        map.get(h.paragraph).push({
-          start, end, text, color: h.color,
-          agent_id: h.agent_id,
-          highlightId: h.id,
-          isMine: h.agent_id && state.agents.find((a) => a.id === h.agent_id)?.name === state.currentAgent,
-          items: [h],
-        });
+        const agentName = h.agent_id ? (state.agents.find((a) => a.id === h.agent_id)?.name || "匿名") : "匿名";
+        if (!byPara.has(h.paragraph)) byPara.set(h.paragraph, []);
+        byPara.get(h.paragraph).push({ start, end, text, color: h.color, agentId: h.agent_id, agentName, id: h.id, h });
       }
-      // 合并同一文字范围的划线（不同 Agent 划同一句）
+
       const result = new Map();
-      for (const [para, marks] of map) {
-        marks.sort((a, b) => a.start - b.start || a.end - b.end);
-        const merged = [];
+      for (const [para, marks] of byPara) {
+        const paraText = paragraphs[para] || "";
+        // —— 我的划线：每个高亮一条彩色实线 ——
+        const mine = marks.filter((m) => m.agentName === state.currentAgent).map((m) => ({
+          start: m.start, end: m.end, text: m.text, color: m.color, highlightId: m.id,
+        }));
+
+        // —— 多人划线（≥2 distinct agent 划同一句段）→ 灰色虚线 ——
+        // 先按精确范围统计参与人数
+        const rangeCount = new Map(); // key "s:e" -> {count, agents:Set}
         for (const m of marks) {
-          const last = merged[merged.length - 1];
-          if (last && last.start === m.start && last.end === m.end) {
-            last.items = [...last.items, ...m.items];
-            last.isGroup = true;
-            last.agent_id = null;
-            last.isMine = m.isMine;
-            // 组里只要有我的就标 isMine
-            last.items.forEach((x) => {
-              if (x.agent_id && state.agents.find((a) => a.id === x.agent_id)?.name === state.currentAgent) last.isMine = true;
-            });
+          const key = `${m.start}:${m.end}`;
+          if (!rangeCount.has(key)) rangeCount.set(key, { count: 0, agents: new Set(), sample: m });
+          rangeCount.get(key).agents.add(m.agentName);
+        }
+        for (const rc of rangeCount.values()) rc.count = rc.agents.size;
+
+        // 高人数范围：参与 ≥2
+        const sharedRanges = [...rangeCount.values()].filter((rc) => rc.count >= 2);
+
+        // 把重叠的高人数范围合并成簇；簇的显示范围 = 簇内人数最多的那条范围
+        // （若两条高人数范围重叠，优先取人数更高的那条的始末）
+        const clusters = [];
+        const sorted = sharedRanges.map((rc) => ({
+          ...rc, s: rc.sample.start, e: rc.sample.end,
+        })).sort((a, b) => a.s - b.s || a.e - b.e);
+        for (const r of sorted) {
+          const last = clusters[clusters.length - 1];
+          if (last && r.s < last.e) {
+            // 重叠 → 合并；显示范围取簇内 count 最大的那条
+            last.members.push(r);
+            last.rangeCount = Math.max(last.rangeCount, r.count);
+            last.e = Math.max(last.e, r.e);
+            const top = [...last.members].sort((a, b) => b.count - a.count)[0];
+            last.displayStart = top.s;
+            last.displayEnd = top.e;
           } else {
-            merged.push(m);
+            clusters.push({
+              s: r.s, e: r.e, members: [r], rangeCount: r.count,
+              displayStart: r.s, displayEnd: r.e,
+            });
           }
         }
-        result.set(para, merged);
+
+        // 簇包含的所有 highlight 对象（供点击筛选"与之交叉的所有高人数划线"）
+        const shared = clusters.map((cl) => {
+          const coveredHighlights = marks.filter((m) => m.start < cl.e && m.end > cl.s);
+          return {
+            start: cl.displayStart, end: cl.displayEnd,
+            text: paraText.slice(cl.displayStart, cl.displayEnd),
+            count: cl.rangeCount,
+            highlightIds: coveredHighlights.map((m) => m.id),
+            covers: coveredHighlights.map((m) => ({ start: m.start, end: m.end })),
+          };
+        });
+
+        result.set(para, { mine, shared });
       }
       return result;
     }
@@ -675,29 +721,57 @@
           popup._suppressClose = true; // 点击 mark 时抑制 mouseup 关闭
           setTimeout(() => { popup._suppressClose = false; }, 100);
           const para = Number(mark.dataset.para);
-          // 自己的划线 → 弹出改色/批注菜单
-          const hlId = mark.dataset.hl;
-          if (hlId) {
+          // 灰色虚线（多人划线）→ 筛选到社区（所有交叉的高人数划线）
+          if (mark.dataset.shared) {
+            const ids = (mark.dataset.sharedId || "").split(",").filter(Boolean).map(Number);
+            openSharedToCommunity(para, ids);
+            return;
+          }
+          // 自己的划线（彩色实线）→ 筛选"我的批注" + 弹出改色/批注菜单
+          if (mark.dataset.hl) {
+            const hlId = Number(mark.dataset.hl);
             state.popupMode = "change-color";
             state.popupAnchor = {
               para,
-              highlight_id: Number(hlId),
+              highlight_id: hlId,
               text: mark.textContent,
             };
+            openMineFilter(para);
             showPopupAt(mark, 40);
             return;
           }
-          // 只批注不划线（红色虚线）→ 弹出批注菜单
+          // 红色虚线（我的批注）→ 筛选"我的批注" + 弹出批注菜单
           if (mark.dataset.noteOnly) {
             state.popupMode = "note-only";
             state.popupAnchor = { para };
+            openMineFilter(para);
             showPopupAt(mark, 40);
             return;
           }
-          // 他人划线虚线 → 筛选到社区
-          openSharedAnnotations(para);
         });
       });
+    }
+
+    // 筛选到"我的批注"：只显示该段的我的卡片
+    function openMineFilter(para) {
+      state.sharedPopup = { para };
+      state.activeTab = "mine";
+      document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === "mine"));
+      renderPanel();
+      const el = document.querySelector(`[data-para="${para}"]`);
+      if (el) el.scrollIntoView({ block: "center" });
+    }
+
+    // 筛选到"社区"：显示该段所有交叉的高人数划线
+    function openSharedToCommunity(para, highlightIds) {
+      state.sharedPopup = { para, highlightIds };
+      state.activeTab = "community";
+      document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === "community"));
+      renderPanel();
+      const el = document.querySelector(`[data-para="${para}"]`);
+      if (el) el.scrollIntoView({ block: "center" });
+      const card = buildSegmentCards().find((c) => c.paragraph === para);
+      if (card) toast(`第 ${para + 1} 段：${card.hlCount} 人划线 / ${card.notes.length} 条批注`);
     }
 
     function showPopupAt(el, offsetY) {
@@ -705,20 +779,6 @@
       popup.style.left = `${Math.min(r.left + r.width / 2 - 90, window.innerWidth - 200)}px`;
       popup.style.top = `${Math.max(0, r.top - offsetY)}px`;
       popup.classList.remove("hidden");
-    }
-
-    function openSharedAnnotations(para) {
-      // 筛选：按当前 tab——"我的批注"只显示我的卡片，"社区"显示所有人
-      state.sharedPopup = { para };
-      const targetTab = state.activeTab === "mine" ? "mine" : "community";
-      state.activeTab = targetTab;
-      document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === targetTab));
-      renderPanel();
-      // 滚动到对应段
-      const el = document.querySelector(`[data-para="${para}"]`);
-      if (el) el.scrollIntoView({ block: "center" });
-      const card = buildSegmentCards().find((c) => c.paragraph === para);
-      if (card) toast(`第 ${para + 1} 段：${card.hlCount} 人划线 / ${card.notes.length} 条批注`);
     }
 
     // ---------- 侧边栏 Tab ----------
@@ -895,7 +955,8 @@
 
       // 子视图：精选（划线人数≥2） / 全部
       const featured = filtered.filter((c) => c.hlCount >= 2);
-      const showFeatured = state.communityView === "featured" && featured.length > 0;
+      // 筛选（点了虚线）时强制显示全部相关卡片，不被"精选"过滤掉
+      const showFeatured = !state.sharedPopup && state.communityView === "featured" && featured.length > 0;
       const viewCards = showFeatured ? featured : filtered;
 
       // 排序（仅"全部"需要；精选按划线人数排）
@@ -949,17 +1010,22 @@
     function renderSegmentCard(c) {
       const name = (id) => id ? (state.agents.find((a) => a.id === id)?.name || "?") : "匿名";
 
-      // 批注列表（可排序：时间/点赞/综合）
+      // 批注列表（可排序：时间/点赞/综合；我的批注默认置顶）
       const notes = [...c.notes];
-      if (state.noteSort === "likes") notes.sort((a, b) => (b.like_count || 0) - (a.like_count || 0));
-      else if (state.noteSort === "mixed") {
+      const isMineNote = (n) => n.agent_id && state.agents.find((x) => x.id === n.agent_id)?.name === state.currentAgent;
+      // 主排序：我的置顶；次级排序按选择
+      if (state.noteSort === "likes") {
+        notes.sort((a, b) => (isMineNote(b) - isMineNote(a)) || ((b.like_count || 0) - (a.like_count || 0)));
+      } else if (state.noteSort === "mixed") {
         const now = Date.now();
         notes.forEach((n) => {
           const t = new Date(n.created_at.replace(" ", "T") + "Z").getTime() || 0;
           n.score = (n.like_count || 0) * 100 - (now - t) / 3600000;
         });
-        notes.sort((a, b) => b.score - a.score);
-      } else notes.sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
+        notes.sort((a, b) => (isMineNote(b) - isMineNote(a)) || (b.score - a.score));
+      } else {
+        notes.sort((a, b) => (isMineNote(b) - isMineNote(a)) || a.created_at.localeCompare(b.created_at) || a.id - b.id);
+      }
 
       let notesHtml;
       if (notes.length) {
@@ -1117,7 +1183,7 @@
       return state.threads.map((t) => `
         <div class="thread-card">
           <div class="t-title" onclick="openThreadDetail(${t.id})">${esc(t.title)}</div>
-          <div class="t-meta">${esc(t.agent_name || "匿名")} · ${t.message_count} 条发言 · 👍 ${t.like_count || 0}
+          <div class="t-meta">${esc(t.agent_name || "匿名")} · ${t.message_count} 条发言
             <button class="like-btn" data-type="thread" data-id="${t.id}" data-liked="${t.liked_by_me}">👍 <span class="cnt">${t.like_count || 0}</span></button>
           </div>
         </div>`).join("") +
