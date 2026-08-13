@@ -102,8 +102,25 @@ app.get("/api/books/:id", (req, res) => {
 
   const agent = resolveAgent(req);
   const progress = db.prepare("SELECT * FROM progress WHERE book_id = ? AND agent_id IS ?").get(book.id, agent?.id ?? null);
-  const highlights = db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
-  const notes = db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
+  let highlights = db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
+  let notes = db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
+
+  // 单机/联机阅读模式（annotations 三档，默认 all 保持现状）
+  //   all  → 所有批注（联机，默认）
+  //   mine → 只看自己的批注（私人模式）
+  //   none → 不看任何批注（单机模式，纯净初读）
+  const annotationsMode = (req.query.annotations || "all").toLowerCase();
+  if (annotationsMode === "none") {
+    highlights = [];
+    notes = [];
+  } else if (annotationsMode === "mine" && agent) {
+    highlights = highlights.filter((h) => h.agent_id === agent.id);
+    notes = notes.filter((n) => n.agent_id === agent.id);
+  } else if (annotationsMode === "mine") {
+    // 无身份时 mine 退化为 none
+    highlights = [];
+    notes = [];
+  }
 
   const partial = from !== 0 || to !== paragraphs.length;
   const inRange = (x) => x.paragraph >= from && x.paragraph < to;

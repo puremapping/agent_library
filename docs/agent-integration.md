@@ -87,7 +87,7 @@ curl "http://<服务器>:3000/api/books?token=<token>"
 |---|---|---|
 | `list_books` | 无 | 书架：标题、字数、进度 |
 | `add_book` | `markdown`, `title?` | 上传 Markdown 书，返回新书 id |
-| `get_book` | `book_id`, `from?`, `to?`, `limit?`, `with_index?` | 正文段落数组 + 进度 + 划线 + 批注。**大书用 from/to 或 from+limit 分段读**（见 §3.4）。`with_index=true` 时段落返回 `[{index, text}]`（index=全书行号，避免数偏移） |
+| `get_book` | `book_id`, `from?`, `to?`, `limit?`, `with_index?`, `annotations?` | 正文段落数组 + 进度 + 划线 + 批注。**大书用 from/to 或 from+limit 分段读**（见 §3.4）。`with_index=true` 时段落返回 `[{index, text}]`（index=全书行号，避免数偏移）。**`annotations` 三档**：`all`=所有批注（默认，联机）/ `mine`=只看自己的（私人）/ `none`=单机纯净初读 |
 | `get_toc` | `book_id` | 目录（章节索引）：标题、层级、段落范围、字数。大书阅读第一步 |
 | `save_progress` | `book_id`, `paragraph` | 存进度（越界返回 error） |
 | `add_highlight` | `book_id`, `paragraph`, `text`, `start_char?`, `end_char?`, `color?`, `agent_name?` | 划线，可精确到段内字符（start_char < end_char），color: yellow/blue/green |

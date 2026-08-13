@@ -74,22 +74,36 @@ server.registerTool("add_book", {
 
 server.registerTool("get_book", {
   description:
-    "读取一本书的正文段落。默认返回整本（小书用）；大书请务必用 from/to 或 from+limit 分段读取，避免整本吞进上下文。阅读协议：先 get_toc 看目录，再用 from/to 按章读，读到哪 save_progress。返回段落数组 + 当前进度 + 该区间内的划线和批注。paragraph 从 0 开始。agent_name 可选，用于标记 liked_by_me。with_index 设为 true 时 paragraphs 返回 [{index, text}]，index 即该段在全书中的行号，避免自己数偏移。",
+    "读取一本书的正文段落。默认返回整本（小书用）；大书请务必用 from/to 或 from+limit 分段读取，避免整本吞进上下文。阅读协议：先 get_toc 看目录，再用 from/to 按章读，读到哪 save_progress。返回段落数组 + 当前进度 + 该区间内的划线和批注。paragraph 从 0 开始。agent_name 可选，用于标记 liked_by_me。with_index 设为 true 时 paragraphs 返回 [{index, text}]，index 即该段在全书中的行号，避免自己数偏移。annotations 三档：all=所有批注（默认，联机模式）/ mine=只看自己的批注（私人模式）/ none=不看任何批注（单机模式，纯净初读）。",
   inputSchema: {
     book_id: z.number().int().describe("书 id"),
     from: z.number().int().optional().describe("起始段落索引（含），默认 0"),
     to: z.number().int().optional().describe("结束段落索引（不含），默认到最后一段。和 limit 二选一"),
     limit: z.number().int().optional().describe("最多返回多少段（从 from 起），替代 to。和 to 二选一"),
     with_index: z.boolean().optional().describe("true 时 paragraphs 返回 [{index, text}]，index=全书行号"),
+    annotations: z.enum(["all", "mine", "none"]).optional().describe("all=所有批注(默认)/mine=只看我的/none=单机纯净"),
     agent_name: z.string().optional().describe("身份名（可选，用于标记哪些已赞）"),
   },
-}, async ({ book_id, from, to, limit, with_index, agent_name }) => {
+}, async ({ book_id, from, to, limit, with_index, annotations, agent_name }) => {
   const book = db.prepare("SELECT * FROM books WHERE id = ?").get(book_id);
   if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
   const agent = getOrCreateAgent(agent_name);
   const progress = db.prepare("SELECT paragraph FROM progress WHERE book_id = ? AND agent_id IS ?").get(book_id, agent?.id ?? null);
-  const highlights = decorateLikes(db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book_id), "highlight", agent?.id);
-  const notes = decorateLikes(db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book_id), "note", agent?.id);
+  let rawHighlights = db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book_id);
+  let rawNotes = db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book_id);
+  const annotationsMode = (annotations || "all").toLowerCase();
+  if (annotationsMode === "none") {
+    rawHighlights = [];
+    rawNotes = [];
+  } else if (annotationsMode === "mine" && agent) {
+    rawHighlights = rawHighlights.filter((h) => h.agent_id === agent.id);
+    rawNotes = rawNotes.filter((n) => n.agent_id === agent.id);
+  } else if (annotationsMode === "mine") {
+    rawHighlights = [];
+    rawNotes = [];
+  }
+  const highlights = decorateLikes(rawHighlights, "highlight", agent?.id);
+  const notes = decorateLikes(rawNotes, "note", agent?.id);
   const paragraphs = splitParagraphs(book.content);
 
   const range = parseRange({ from, to, limit }, paragraphs.length);
