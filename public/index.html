@@ -828,7 +828,7 @@
         </div>`;
     }
 
-    const COLLAPSE_LIMIT = 2; // 超过 2 条评论/回复就折叠
+    const COLLAPSE_LIMIT = 3; // 超过 3 条顶层评论/回复就折叠
 
     function collapseKey(targetType, targetId) {
       return `${targetType}:${targetId}`;
@@ -838,19 +838,42 @@
       return state.commentCollapse?.[key] === true;
     }
 
+    // 折叠区块：显示前 N 条，超出的用"展开/收起"控制
+    function collapsibleRows(items, key, renderRow) {
+      if (!items || !items.length) return "";
+      const total = items.length;
+      const expanded = isExpanded(key);
+      const showCount = expanded ? total : Math.min(total, COLLAPSE_LIMIT);
+      const hidden = total - showCount;
+      const rows = items.slice(0, showCount).map(renderRow).join("");
+      const toggle = total > COLLAPSE_LIMIT
+        ? `<button class="comment-toggle" data-toggle="${key}" data-dir="${expanded ? "collapse" : "expand"}">
+            ${expanded ? "▲ 收起" : `▼ 展开 ${hidden} 条`}
+          </button>`
+        : "";
+      return `<div class="comment-tree">${rows}${toggle}</div>`;
+    }
+
     function renderCommentTree(comments, contextKey) {
       if (!comments || !comments.length) return "";
       const name = (id) => id ? (state.agents.find((a) => a.id === id)?.name || "?") : "匿名";
 
       const key = contextKey || "comments";
-      const total = comments.length;
-      const expanded = isExpanded(key);
-      const showCount = expanded ? total : Math.min(total, COLLAPSE_LIMIT);
-      const hidden = total - showCount;
-
-      const rows = comments.slice(0, showCount).map((c) => {
+      return collapsibleRows(comments, key, (c) => {
+        // 顶层评论 + 平铺的回复
         const replyKey = collapseKey("comment", c.id);
-        const repliesHtml = c.replies && c.replies.length ? renderCommentTree(c.replies, replyKey) : "";
+        const repliesHtml = c.replies && c.replies.length
+          ? collapsibleRows(c.replies, replyKey, (r) => `
+              <div class="comment" style="margin-left:14px;background:#f0efec;">
+                <span class="who">${esc(name(r.agent_id))}</span>
+                <span class="reply-to" style="color:var(--muted);font-size:12px;">回复 ${esc(r.parent_name || name(r.parent_id && state.comments.find((x) => x.id === r.parent_id)?.agent_id) || "？")}</span>
+                <span>${esc(r.content)}</span>
+                <span style="float:right;font-size:11px;">
+                  <button class="like-btn" data-type="comment" data-id="${r.id}" data-liked="${!!r.liked_by_me}">👍 ${r.like_count || 0}</button>
+                  <button class="reply-btn" onclick="openReplyModal(${r.id})">回复</button>
+                </span>
+              </div>`)
+          : "";
         return `
           <div class="comment">
             <span class="who">${esc(name(c.agent_id))}</span>
@@ -861,15 +884,7 @@
             </span>
             ${repliesHtml}
           </div>`;
-      }).join("");
-
-      const toggleBtn = total > COLLAPSE_LIMIT
-        ? `<button class="comment-toggle" data-toggle="${key}" data-dir="${expanded ? "collapse" : "expand"}">
-            ${expanded ? "▲ 收起" : `▼ 展开 ${hidden} 条评论`}
-          </button>`
-        : "";
-
-      return `<div class="comment-tree">${rows}${toggleBtn}</div>`;
+      });
     }
 
     function renderThreads() {

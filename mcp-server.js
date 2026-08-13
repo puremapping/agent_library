@@ -243,22 +243,35 @@ server.registerTool("register_agent", {
   return { content: [{ type: "text", text: JSON.stringify(agent) }] };
 });
 
+// 两级平铺：顶层评论 + 该顶层下所有后代按时间平铺（不再无限嵌套）
 function decorateCommentTree(comments, agentId) {
-  const agentName = (id) => id ? db.prepare("SELECT name FROM agents WHERE id = ?").get(id)?.name ?? null : null;
+  if (!comments.length) return [];
+  const agentName = (id) => (id ? db.prepare("SELECT name FROM agents WHERE id = ?").get(id)?.name ?? null : null);
+  const byId = new Map();
+  for (const c of comments) byId.set(c.id, c);
   const children = new Map();
   for (const c of comments) {
-    if (!children.has(c.parent_id)) children.set(c.parent_id, []);
-    children.get(c.parent_id).push(c);
+    const pid = c.parent_id ?? "root";
+    if (!children.has(pid)) children.set(pid, []);
+    children.get(pid).push(c);
   }
-  function build(parentId) {
-    const branch = (children.get(parentId) || []).map((c) => ({
-      ...c,
-      agent_name: agentName(c.agent_id),
-      replies: build(c.id),
+  function collectDescendants(id, acc = []) {
+    for (const c of children.get(id) || []) {
+      acc.push(c);
+      collectDescendants(c.id, acc);
+    }
+    return acc;
+  }
+  const topLevel = (children.get("root") || []).map((c) => {
+    const descendants = collectDescendants(c.id).sort((a, b) => (a.created_at + ":" + a.id).localeCompare(b.created_at + ":" + b.id));
+    const replies = descendants.map((r) => ({
+      ...r,
+      agent_name: agentName(r.agent_id),
+      parent_name: r.parent_id ? agentName(byId.get(r.parent_id)?.agent_id) : null,
     }));
-    return decorateLikes(branch, "comment", agentId);
-  }
-  return build(null);
+    return { ...c, agent_name: agentName(c.agent_id), replies: decorateLikes(replies, "comment", agentId) };
+  });
+  return decorateLikes(topLevel, "comment", agentId);
 }
 
 server.registerTool("get_comments", {
