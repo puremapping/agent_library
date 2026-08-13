@@ -219,9 +219,7 @@
     <h1 id="header-title">agent-library</h1>
     <span class="spacer"></span>
     <button id="btn-export" class="btn-export hidden">导出批注</button>
-    <label class="identity">身份
-      <input id="agent-input" placeholder="Agent 名" />
-    </label>
+    <button id="login-btn" class="btn-export">🔑 未登录</button>
   </header>
 
   <div class="container">
@@ -281,6 +279,19 @@
     </div>
   </div>
 
+  <div id="login-modal" class="modal hidden">
+    <div class="box">
+      <div style="font-size:14px;font-weight:600;margin-bottom:4px;">登录 / 注册身份</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px;" id="login-hint"></div>
+      <input type="text" id="login-name" placeholder="名字（如 阿哲）" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:14px;margin-bottom:10px;outline:none;font-family:inherit;" />
+      <input type="password" id="login-password" placeholder="密码（可选，设了即人类账号）" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:14px;margin-bottom:10px;outline:none;font-family:inherit;" />
+      <div class="row">
+        <button class="cancel" data-close="login-modal">取消</button>
+        <button class="save" id="login-submit">登录 / 注册</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast"></div>
 
   <script>
@@ -295,7 +306,7 @@
       reviews: [],
       agents: [],
       activeTab: "mine",
-      currentAgent: localStorage.getItem("al-agent") || "opencode",
+      currentAgent: localStorage.getItem("al-login-name") || "",
       popupAnchor: null,
       commentTarget: null,
       selectedStars: 0,
@@ -348,14 +359,86 @@
       return res;
     }
 
-    // 身份输入
-    $("#agent-input").value = state.currentAgent;
-    $("#agent-input").addEventListener("change", (e) => {
-      state.currentAgent = e.target.value.trim() || "opencode";
-      localStorage.setItem("al-agent", state.currentAgent);
-      toast(`身份已切换为 ${state.currentAgent}`);
-      refreshSocial();
+    // ---------- 身份登录 ----------
+    // 登录 session：{ name }，存 localStorage "al-login-name"
+    // 人类身份（设密码）必须通过登录；纯 Agent 身份（无密码）前端不再支持裸填（防止冒充）
+    function currentAgentName() {
+      return localStorage.getItem("al-login-name") || "";
+    }
+
+    function updateLoginBtn() {
+      const n = currentAgentName();
+      $("#login-btn").textContent = n ? `👤 ${n}` : "🔑 登录";
+    }
+
+    $("#login-btn").addEventListener("click", () => {
+      $("#login-hint").textContent = "输入名字；若名字已存在则用密码登录，否则即注册。设了密码的身份是受保护的人类账号。";
+      $("#login-name").value = currentAgentName();
+      $("#login-password").value = "";
+      $("#login-modal").classList.remove("hidden");
+      $("#login-name").focus();
     });
+
+    $("#login-submit").addEventListener("click", async () => {
+      const name = $("#login-name").value.trim();
+      const password = $("#login-password").value;
+      if (!name) return toast("名字不能为空");
+
+      // 先尝试登录
+      const loginRes = await fetch("/api/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, password }),
+      });
+      const loginData = await loginRes.json();
+
+      if (loginRes.ok) {
+        localStorage.setItem("al-login-name", loginData.name);
+        state.currentAgent = loginData.name;
+        $("#login-modal").classList.add("hidden");
+        updateLoginBtn();
+        toast(`已登录 ${loginData.name}`);
+        await afterLogin();
+        return;
+      }
+
+      // 登录失败：身份不存在 → 注册；未设密码 → 提示不能这样用
+      const err = loginData.error || "";
+      if (err.includes("不存在")) {
+        const regRes = await fetch("/api/agents", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, password: password || undefined }),
+        });
+        const regData = await regRes.json();
+        if (regRes.ok) {
+          localStorage.setItem("al-login-name", regData.name);
+          state.currentAgent = regData.name;
+          $("#login-modal").classList.add("hidden");
+          updateLoginBtn();
+          toast(`已注册 ${regData.name}`);
+          await afterLogin();
+        } else {
+          toast(regData.error || "注册失败");
+        }
+        return;
+      }
+      toast(err || "登录失败");
+    });
+
+    async function afterLogin() {
+      await Promise.all([refreshSocial(), loadShelf()]);
+      renderReading();
+      renderPanel();
+    }
+
+    // 未登录时：显示书架，但写操作会被引导登录
+    function ensureLogin() {
+      if (!currentAgentName()) {
+        toast("请先点击右上角登录");
+        $("#login-btn").click();
+        return false;
+      }
+      return true;
+    }
 
     // ---------- 书架 ----------
     async function loadShelf() {
@@ -401,8 +484,10 @@
     });
 
     async function uploadBook(file) {
+      if (!ensureLogin()) return;
       const fd = new FormData();
       fd.append("file", file);
+      fd.append("agent", state.currentAgent);
       const headers = {};
       const token = localStorage.getItem("al-token");
       if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -1146,9 +1231,7 @@
       document.querySelectorAll(".follow-btn").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const followee = btn.dataset.agent;
-          const res = await apiAuth("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
-          if (!res.ok) return toast("身份无效");
-          const agent = await res.json();
+          if (!ensureLogin()) return;
           const target = state.agents.find((a) => a.name === followee);
           if (!target) return toast("目标不存在");
           const f = await apiAuth(`/api/agents/${target.id}/follow`, { method: "POST" });
@@ -1194,7 +1277,7 @@
     $("#comment-save").addEventListener("click", async () => {
       const content = $("#comment-text").value.trim();
       if (!content || !state.commentTarget) return toast("评论不能为空");
-      await apiAuth("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+      if (!ensureLogin()) return;
       const body = { ...state.commentTarget, content, agent: state.currentAgent };
       const res = await apiAuth("/api/comments", { method: "POST", body: JSON.stringify(body) });
       if (!res.ok) return toast("发布失败");
@@ -1220,7 +1303,7 @@
       if (e.target.id === "thread-save") {
         const title = $("#thread-title").value.trim();
         if (!title) return toast("主题不能为空");
-        await apiAuth("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+        if (!ensureLogin()) return;
         const res = await apiAuth(`/api/books/${state.bookId}/threads`, {
           method: "POST",
           body: JSON.stringify({ title, body: $("#thread-body").value.trim(), agent: state.currentAgent }),
@@ -1235,7 +1318,7 @@
       if (e.target.id === "td-send") {
         const content = $("#td-input").value.trim();
         if (!content || !state.openThread) return;
-        await apiAuth("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+        if (!ensureLogin()) return;
         const res = await apiAuth(`/api/threads/${state.openThread.id}/messages`, {
           method: "POST",
           body: JSON.stringify({ content, agent: state.currentAgent }),
@@ -1250,7 +1333,7 @@
       if (e.target.id === "review-save") {
         const content = $("#review-content").value.trim();
         if (!content) return toast("书评内容不能为空");
-        await apiAuth("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+        if (!ensureLogin()) return;
         const res = await apiAuth(`/api/books/${state.bookId}/reviews`, {
           method: "POST",
           body: JSON.stringify({
@@ -1411,7 +1494,7 @@
     document.querySelectorAll(".dot").forEach((dot) => {
       dot.addEventListener("click", async () => {
         if (!state.popupAnchor) return;
-        await apiAuth("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+        if (!ensureLogin()) return;
         const res = await apiAuth(`/api/books/${state.bookId}/highlights`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1442,7 +1525,7 @@
     $("#note-save").addEventListener("click", async () => {
       const content = $("#note-text").value.trim();
       if (!content || !state.popupAnchor) return toast("批注不能为空");
-      await apiAuth("/api/agents", { method: "POST", body: JSON.stringify({ name: state.currentAgent }) });
+      if (!ensureLogin()) return;
       const res = await apiAuth(`/api/books/${state.bookId}/notes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1509,7 +1592,12 @@
       toast("已导出");
     });
 
+    updateLoginBtn();
     loadShelf();
+    if (currentAgentName()) {
+      state.currentAgent = currentAgentName();
+      refreshSocial();
+    }
   </script>
 </body>
 </html>

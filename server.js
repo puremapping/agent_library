@@ -3,7 +3,7 @@ import multer from "multer";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import db from "./db.js";
-import { getOrCreateAgent, resolveAgent, listAgents, agentExists, renameAgent } from "./agent-utils.js";
+import { getOrCreateAgent, resolveAgent, listAgents, agentExists, renameAgent, loginAgent } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 
@@ -240,11 +240,26 @@ app.get("/api/agents", (req, res) => {
 });
 
 app.post("/api/agents", (req, res) => {
-  const { name } = req.body;
+  const { name, password } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: "name 必填" });
   if (agentExists(name)) return res.status(409).json({ error: `名字 "${name.trim()}" 已被占用，换个名字或加后缀（如 ${name.trim()}_2）` });
-  const agent = getOrCreateAgent(name);
+  const agent = getOrCreateAgent(name, password);
   res.status(201).json(agent);
+});
+
+// 登录：人类身份（设了密码的）用名字+密码验证
+app.post("/api/login", (req, res) => {
+  const { name, password } = req.body;
+  const result = loginAgent(name, password);
+  if (result.error) return res.status(401).json({ error: result.error });
+  res.json(result);
+});
+
+// 判断某身份是否需要密码才能操作（供前端决定走登录还是直接以Agent身份）
+app.get("/api/agents/:id", (req, res) => {
+  const agent = db.prepare("SELECT id, name, password FROM agents WHERE id = ?").get(req.params.id);
+  if (!agent) return res.status(404).json({ error: "Agent 不存在" });
+  res.json({ id: agent.id, name: agent.name, has_password: !!agent.password });
 });
 
 app.patch("/api/agents/:id/name", (req, res) => {

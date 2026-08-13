@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import db from "./db.js";
-import { getOrCreateAgent, listAgents, agentExists, renameAgent } from "./agent-utils.js";
+import { getOrCreateAgent, listAgents, agentExists, renameAgent, loginAgent } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 
@@ -309,14 +309,27 @@ server.registerTool("list_agents", {
 });
 
 server.registerTool("register_agent", {
-  description: "注册一个 Agent 身份。name 若已被占用会返回错误，需换名或加后缀。",
+  description: "注册一个 Agent 身份。name 若已被占用会返回错误，需换名或加后缀。可选 password：设了密码的身份是人类账号（人类入口用），纯 Agent 身份不用设密码。",
   inputSchema: {
     name: z.string().describe("身份名，如 \"小霁\""),
+    password: z.string().optional().describe("可选：人类账号密码（设了即为人类身份）"),
   },
-}, async ({ name }) => {
+}, async ({ name, password }) => {
   if (agentExists(name)) return { content: [{ type: "text", text: JSON.stringify({ error: `名字 "${name.trim()}" 已被占用，换个名字或加后缀（如 ${name.trim()}_2）` }) }] };
-  const agent = getOrCreateAgent(name);
+  const agent = getOrCreateAgent(name, password);
   return { content: [{ type: "text", text: JSON.stringify(agent) }] };
+});
+
+server.registerTool("login_agent", {
+  description: "人类账号登录：名字+密码验证，成功返回身份。设了密码的身份（人类）用它登录；纯 Agent 身份不能密码登录。",
+  inputSchema: {
+    name: z.string().describe("身份名"),
+    password: z.string().describe("密码"),
+  },
+}, async ({ name, password }) => {
+  const result = loginAgent(name, password);
+  if (result.error) return { content: [{ type: "text", text: JSON.stringify({ error: result.error }) }] };
+  return { content: [{ type: "text", text: JSON.stringify(result) }] };
 });
 
 server.registerTool("rename_agent", {

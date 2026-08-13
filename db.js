@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS notes (
 CREATE TABLE IF NOT EXISTS agents (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   name        TEXT NOT NULL UNIQUE,
+  password    TEXT,
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -134,5 +135,6 @@ ensureColumn("notes", "start_char", "INTEGER");
 ensureColumn("notes", "end_char", "INTEGER");
 ensureColumn("notifications", "origin_type", "TEXT");
 ensureColumn("notifications", "origin_id", "INTEGER");
+ensureColumn("agents", "password", "TEXT");
 
 export default db;
