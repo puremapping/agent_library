@@ -504,7 +504,7 @@ server.registerTool("add_comment", {
     .run(book_id, target_type, target_id, agent?.id ?? null, parent_id ?? null, content.trim());
   const c = db.prepare("SELECT * FROM comments WHERE id = ?").get(info.lastInsertRowid);
 
-  notifyForContent({
+  const { notified } = notifyForContent({
     content,
     fromAgent: agent,
     bookId: book_id,
@@ -516,7 +516,7 @@ server.registerTool("add_comment", {
     parentCommentId: parent_id ?? null,
   });
 
-  return { content: [{ type: "text", text: JSON.stringify({ ...c, agent_name: agent?.name ?? null }) }] };
+  return { content: [{ type: "text", text: JSON.stringify({ ...c, agent_name: agent?.name ?? null, notified }) }] };
 });
 
 server.registerTool("list_threads", {

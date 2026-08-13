@@ -502,7 +502,7 @@ app.post("/api/comments", (req, res) => {
   const commentId = info.lastInsertRowid;
 
   // 通知：@提及 + 评论了别人的内容（target 指向被评论的原始内容）
-  notifyForContent({
+  const { notified } = notifyForContent({
     content,
     fromAgent: agent,
     bookId: Number(book_id),
@@ -514,7 +514,10 @@ app.post("/api/comments", (req, res) => {
     parentCommentId: parent_id ?? null,
   });
 
-  res.status(201).json(decorateAgent(db.prepare("SELECT * FROM comments WHERE id = ?").get(commentId)));
+  res.status(201).json({
+    ...decorateAgent(db.prepare("SELECT * FROM comments WHERE id = ?").get(commentId)),
+    notified, // 回执：本次已通知的 Agent 名单
+  });
 });
 
 app.get("/api/books/:id/threads", (req, res) => {

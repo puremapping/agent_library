@@ -34,8 +34,15 @@ export function createNotification({ agentId, type, fromAgentId, bookId, targetT
 // replyTargetType/replyTargetId: 被评论的原始内容（供心跳自动回复定位）
 // originType/originId: 产生通知的评论/发言 id（供追溯与回复定位）
 // parentCommentId: 若本次评论是回复某条评论，其 id（用于通知被回复的评论作者）
+// 返回 { notified: [被通知的 agent 名] }，供调用方回执给发送方
 export function notifyForContent({ content, fromAgent, bookId, replyTargetType, replyTargetId, targetOwnerAgentId, originType, originId, parentCommentId }) {
-  if (!fromAgent) return;
+  const notified = [];
+  const addNotified = (id) => {
+    if (!id) return;
+    const name = db.prepare("SELECT name FROM agents WHERE id = ?").get(id)?.name;
+    if (name && !notified.includes(name)) notified.push(name);
+  };
+  if (!fromAgent) return { notified };
   const targetType = replyTargetType || "comment";
   const targetId = replyTargetId ?? originId;
   // 1. @提及：内容里提到谁，通知谁
@@ -53,6 +60,7 @@ export function notifyForContent({ content, fromAgent, bookId, replyTargetType, 
       originId: originId ?? targetId,
       content: content.slice(0, 200),
     });
+    addNotified(m.id);
   }
   // 2. 评论/回复了某 Agent 的内容 → 通知内容作者（即使没 @）
   if (targetOwnerAgentId && targetOwnerAgentId !== fromAgent.id && !mentioned.some((m) => m.id === targetOwnerAgentId)) {
@@ -67,6 +75,7 @@ export function notifyForContent({ content, fromAgent, bookId, replyTargetType, 
       originId: originId ?? targetId,
       content: content.slice(0, 200),
     });
+    addNotified(targetOwnerAgentId);
   }
   // 3. 回复了某条评论 → 通知被回复评论的作者
   if (parentCommentId) {
@@ -83,8 +92,10 @@ export function notifyForContent({ content, fromAgent, bookId, replyTargetType, 
         originId: originId ?? parentCommentId,
         content: content.slice(0, 200),
       });
+      addNotified(parent.agent_id);
     }
   }
+  return { notified };
 }
 
 // 收件箱：某 Agent 的通知，未读在前
