@@ -369,7 +369,8 @@ app.post("/api/likes", (req, res) => {
 });
 
 app.delete("/api/likes", (req, res) => {
-  const { target_type, target_id } = req.query;
+  // 支持 query（旧）或 body（与 POST 对称）传参
+  const { target_type, target_id } = req.query.target_type ? req.query : (req.body || {});
   if (!target_type || !Number.isInteger(Number(target_id)))
     return res.status(400).json({ error: "target_type 和 target_id 必填" });
   const agent = resolveAgent(req);

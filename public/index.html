@@ -1209,7 +1209,7 @@
           const res = await apiAuth("/api/likes", {
             method: liked ? "DELETE" : "POST",
             headers: { "Content-Type": "application/json" },
-            body: liked ? undefined : JSON.stringify({ ...payload, agent: state.currentAgent }),
+            body: JSON.stringify({ ...payload, agent: state.currentAgent }),
           });
           if (!res.ok) return toast("操作失败");
           const data = await res.json();
@@ -1217,6 +1217,8 @@
           const cnt = btn.querySelector(".cnt");
           if (cnt) cnt.textContent = data.like_count;
           else btn.textContent = `👍 ${data.like_count}`;
+          // 刷新 book 数据（更新 liked_by_me），让再次点击能正确取消
+          await reloadBook();
           await refreshSocial();
         });
       });
