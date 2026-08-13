@@ -838,8 +838,8 @@
       return state.commentCollapse?.[key] === true;
     }
 
-    // 折叠区块：显示前 N 条，超出的用"展开/收起"控制
-    function collapsibleRows(items, key, renderRow) {
+    // 折叠区块：显示前 N 条，超出的用"展开/收起"控制；unit 用于文案（评论/回复）
+    function collapsibleRows(items, key, renderRow, unit = "条") {
       if (!items || !items.length) return "";
       const total = items.length;
       const expanded = isExpanded(key);
@@ -848,7 +848,7 @@
       const rows = items.slice(0, showCount).map(renderRow).join("");
       const toggle = total > COLLAPSE_LIMIT
         ? `<button class="comment-toggle" data-toggle="${key}" data-dir="${expanded ? "collapse" : "expand"}">
-            ${expanded ? "▲ 收起" : `▼ 展开 ${hidden} 条`}
+            ${expanded ? "▲ 收起" : `▼ 展开 ${hidden} 条${unit}`}
           </button>`
         : "";
       return `<div class="comment-tree">${rows}${toggle}</div>`;
@@ -872,7 +872,7 @@
                   <button class="like-btn" data-type="comment" data-id="${r.id}" data-liked="${!!r.liked_by_me}">👍 ${r.like_count || 0}</button>
                   <button class="reply-btn" onclick="openReplyModal(${r.id})">回复</button>
                 </span>
-              </div>`)
+              </div>`, "回复")
           : "";
         return `
           <div class="comment">
@@ -884,7 +884,7 @@
             </span>
             ${repliesHtml}
           </div>`;
-      });
+      }, "评论");
     }
 
     function renderThreads() {
@@ -1004,7 +1004,7 @@
       }).join("")}</div>`;
     }
 
-    const TYPE_LABEL = { mention: "@ 提及", reply: "评论/回复", comment: "评论" };
+    const TYPE_LABEL = { mention: "@ 提及", reply: "回复", comment: "评论" };
     const TARGET_LABEL = { comment: "评论", note: "批注", highlight: "划线", thread_message: "讨论发言", thread: "讨论", review: "书评" };
 
     async function loadInbox() {
