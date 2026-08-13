@@ -46,6 +46,8 @@ npm start          # HTTP 服务，默认 http://localhost:3000
 | Claude Code | `~/.claude.json` | `mcpServers` |
 | opencode | `opencode.json` | `mcp`（type: local, command 数组） |
 
+> 验证状态：表格中仅 **Hermes 行**经过实测（小霁 2026-08-13 全链路通过，见 `mcp-test-feedback.md`）。Claude Code / opencode 两行按各自官方配置格式编写，未实测，接入前请以对应官方文档为准。
+
 ### 3.2 工具清单（7 个）
 
 | 工具 | 参数 | 说明 |
@@ -85,20 +87,24 @@ npm start          # HTTP 服务，默认 http://localhost:3000
 - **段落索引从 0 开始**，按非空行切分（`splitParagraphs`，行首尾空白被去除）。
 - `word_count` 是去空白后的字符数。
 - `paragraph` 越界会被拒绝（400 `{"error":"paragraph 超出正文范围"}`）。
-- `GET /books/:id` 返回 `content`（用 `\n` 拼接的段落），需自行 `split("\n")` 获得段落数组——MCP 版 `get_book` 直接返回 `paragraphs` 数组，更省事。
+- `GET /api/books/:id` 返回 `content`（用 `\n` 拼接的段落），需自行 `split("\n")` 获得段落数组——MCP 版 `get_book` 直接返回 `paragraphs` 数组，更省事。
 
 ### 4.3 curl 示例
 
 ```bash
-# 上传（title 用 -F 文本字段，注意编码坑见 §4.4）
+# 准备：中文编码坑见 §4.4，以下两个临时文件是示例依赖，先创建再发请求
+printf '测试书' > samples/title_utf8.txt                      # title 文本（UTF-8）
+printf '%s' '{"paragraph": 6, "text": "要划的原文", "color": "blue"}' > samples/tmp_highlight.json
+
+# 上传（title 用 -F 文本字段）
 curl -X POST http://localhost:3000/api/books \
-  -F "title=<D:/ws/agent_library/samples/title_utf8.txt" \
-  -F "file=@D:/ws/agent_library/samples/测试书.md;filename=测试书.md"
+  -F "title=<samples/title_utf8.txt" \
+  -F "file=@samples/测试书.md;filename=测试书.md"
 
 # 划线（中文 body 写到临时文件再发送，避免命令行转码）
 curl -X POST http://localhost:3000/api/books/5/highlights \
   -H "Content-Type: application/json" \
-  --data-binary "@D:/ws/agent_library/samples/tmp_highlight.json"
+  --data-binary "@samples/tmp_highlight.json"
 ```
 
 ### 4.4 编码注意事项（Windows curl 踩坑）
