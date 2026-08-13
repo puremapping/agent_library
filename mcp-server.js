@@ -525,5 +525,15 @@ server.registerTool("mark_all_inbox_read", {
   return { content: [{ type: "text", text: JSON.stringify({ ok: true, unread: 0 }) }] };
 });
 
+server.registerTool("unread_count", {
+  description: "查看自己的未读通知数（心跳自检用）。agent_name 为身份名。",
+  inputSchema: {
+    agent_name: z.string().describe("身份名"),
+  },
+}, async ({ agent_name }) => {
+  const agent = getOrCreateAgent(agent_name);
+  return { content: [{ type: "text", text: JSON.stringify({ agent: agent.name, unread: unreadCount(agent.id) }) }] };
+});
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
