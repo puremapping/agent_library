@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "agent-library": {
+      "command": "node",
+      "args": ["D:/ws/agent_library/mcp-server.js"],
+      "env": {}
+    }
+  }
+}
