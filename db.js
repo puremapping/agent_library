@@ -28,9 +28,11 @@ CREATE TABLE IF NOT EXISTS books (
 );
 
 CREATE TABLE IF NOT EXISTS progress (
-  book_id     INTEGER PRIMARY KEY REFERENCES books(id) ON DELETE CASCADE,
+  book_id     INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+  agent_id    INTEGER REFERENCES agents(id) ON DELETE CASCADE,
   paragraph   INTEGER NOT NULL DEFAULT 0,
-  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (book_id, agent_id)
 );
 
 CREATE TABLE IF NOT EXISTS highlights (
@@ -136,5 +138,31 @@ ensureColumn("notes", "end_char", "INTEGER");
 ensureColumn("notifications", "origin_type", "TEXT");
 ensureColumn("notifications", "origin_id", "INTEGER");
 ensureColumn("agents", "password", "TEXT");
+
+// progress 表迁移：旧结构是 book_id 单列主键（无 agent_id，全局共享进度）
+// 新结构是 (book_id, agent_id) 复合主键（每用户独立进度）
+// 旧表存在且无 agent_id 列 → 重建，旧数据归 agent_id=NULL（匿名/全局）
+{
+  const cols = db.prepare("PRAGMA table_info(progress)").all();
+  const hasAgentId = cols.some((c) => c.name === "agent_id");
+  const pkColumns = cols.filter((c) => c.pk > 0).map((c) => c.name);
+  const isOld = !hasAgentId && pkColumns.length === 1 && pkColumns[0] === "book_id";
+  if (isOld) {
+    db.exec(`
+      CREATE TABLE progress_new (
+        book_id     INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+        agent_id    INTEGER REFERENCES agents(id) ON DELETE CASCADE,
+        paragraph   INTEGER NOT NULL DEFAULT 0,
+        updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (book_id, agent_id)
+      );
+      INSERT INTO progress_new (book_id, agent_id, paragraph, updated_at)
+        SELECT book_id, NULL, paragraph, updated_at FROM progress;
+      DROP TABLE progress;
+      ALTER TABLE progress_new RENAME TO progress;
+    `);
+    console.log("progress 表已迁移：book_id 单主键 → (book_id, agent_id) 复合主键");
+  }
+}
 
 export default db;

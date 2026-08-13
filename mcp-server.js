@@ -40,16 +40,20 @@ function paragraphWithinRange(bookId, paragraph) {
 }
 
 server.registerTool("list_books", {
-  description: "列出书架上的所有书，含标题、字数、阅读进度段落",
-}, async () => {
+  description: "列出书架上的所有书，含标题、字数、阅读进度段落（进度按 agent_name 隔离）。",
+  inputSchema: {
+    agent_name: z.string().optional().describe("身份名（可选，进度按身份显示）"),
+  },
+}, async ({ agent_name }) => {
+  const agent = getOrCreateAgent(agent_name);
   const books = db
     .prepare(
       `SELECT b.id, b.title, b.word_count, b.created_at,
               COALESCE(p.paragraph, 0) AS progress_paragraph
-       FROM books b LEFT JOIN progress p ON p.book_id = b.id
+       FROM books b LEFT JOIN progress p ON p.book_id = b.id AND p.agent_id = ?
        ORDER BY b.created_at DESC`
     )
-    .all();
+    .all(agent?.id ?? null);
   return { content: [{ type: "text", text: JSON.stringify(markUntrusted(books), null, 2) }] };
 });
 
@@ -80,8 +84,8 @@ server.registerTool("get_book", {
 }, async ({ book_id, agent_name }) => {
   const book = db.prepare("SELECT * FROM books WHERE id = ?").get(book_id);
   if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
-  const progress = db.prepare("SELECT paragraph FROM progress WHERE book_id = ?").get(book_id);
   const agent = getOrCreateAgent(agent_name);
+  const progress = db.prepare("SELECT paragraph FROM progress WHERE book_id = ? AND agent_id = ?").get(book_id, agent?.id ?? null);
   const highlights = decorateLikes(db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book_id), "highlight", agent?.id);
   const notes = decorateLikes(db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book_id), "note", agent?.id);
   const paragraphs = splitParagraphs(book.content);
@@ -103,19 +107,21 @@ server.registerTool("get_book", {
 });
 
 server.registerTool("save_progress", {
-  description: "保存阅读进度到某个段落（paragraph 从 0 开始）。返回 ok。",
+  description: "保存阅读进度到某个段落（paragraph 从 0 开始）。agent_name 为身份名，进度按身份独立保存。返回 ok。",
   inputSchema: {
     book_id: z.number().int().describe("书 id"),
     paragraph: z.number().int().describe("当前读到的段落索引（0 开始）"),
+    agent_name: z.string().optional().describe("身份名（可选，进度按身份隔离）"),
   },
-}, async ({ book_id, paragraph }) => {
+}, async ({ book_id, paragraph, agent_name }) => {
   if (!paragraphWithinRange(book_id, paragraph)) {
     return { content: [{ type: "text", text: JSON.stringify({ error: "paragraph 超出正文范围" }) }] };
   }
+  const agent = getOrCreateAgent(agent_name);
   db.prepare(
-    `INSERT INTO progress (book_id, paragraph, updated_at) VALUES (?, ?, datetime('now'))
-     ON CONFLICT(book_id) DO UPDATE SET paragraph = excluded.paragraph, updated_at = datetime('now')`
-  ).run(book_id, paragraph);
+    `INSERT INTO progress (book_id, agent_id, paragraph, updated_at) VALUES (?, ?, ?, datetime('now'))
+     ON CONFLICT(book_id, agent_id) DO UPDATE SET paragraph = excluded.paragraph, updated_at = datetime('now')`
+  ).run(book_id, agent?.id ?? null, paragraph);
   return { content: [{ type: "text", text: JSON.stringify({ ok: true, paragraph }) }] };
 });
 

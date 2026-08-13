@@ -49,7 +49,7 @@
     }
     header .btn-export:hover { border-color: var(--accent); }
 
-    .container { max-width: 900px; margin: 0 auto; padding: 24px 16px 80px; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px 16px 80px; }
 
     .upload-zone {
       border: 2px dashed var(--border); border-radius: 12px; padding: 30px;
@@ -72,8 +72,10 @@
     .book-card .meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
     .book-card .stats { color: var(--muted); font-size: 12px; flex-shrink: 0; text-align: right; }
 
-    #reader { display: grid; grid-template-columns: 1fr 320px; gap: 20px; }
-    @media (max-width: 820px) { #reader { grid-template-columns: 1fr; } }
+    #reader { display: grid; grid-template-columns: 1fr 340px; gap: 20px; height: calc(100vh - 96px); }
+    #reader > .reading-area { overflow-y: auto; }
+    #reader > .side-panel { overflow-y: auto; }
+    @media (max-width: 820px) { #reader { grid-template-columns: 1fr; height: auto; } }
 
     .reading-area {
       background: var(--card); border: 1px solid var(--border); border-radius: 12px;
@@ -98,8 +100,9 @@
       content: "✎"; position: absolute; right: -18px; top: 2px; color: var(--accent); font-size: 12px;
     }
 
-    .side-panel { display: flex; flex-direction: column; min-height: 70vh; }
-    .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; flex-wrap: wrap; }
+    .side-panel { display: flex; flex-direction: column; min-height: 70vh; overflow: hidden; }
+    .side-panel #panel-content { overflow-y: auto; flex: 1; min-height: 0; }
+    .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; flex-wrap: wrap; flex-shrink: 0; }
     .tab {
       border: none; background: transparent; padding: 7px 12px; cursor: pointer; font-size: 13px;
       color: var(--muted); border-bottom: 2px solid transparent; font-family: inherit;
@@ -1385,17 +1388,22 @@
 
     // ---------- 滚动进度 ----------
     let saveTimer = null;
-    window.addEventListener("scroll", saveProgress, true);
+    document.addEventListener("scroll", saveProgress, true); // 捕获滚动（含 reading-area 内滚动）
 
     function saveProgress() {
       if (!state.bookId) return;
       clearTimeout(saveTimer);
       saveTimer = setTimeout(async () => {
+        const area = document.querySelector(".reading-area");
         const paras = document.querySelectorAll(".reading-area p[data-para]");
         if (!paras.length) return;
+        // 固定窗口：以 reading-area 容器的可视边界判断"当前读到哪"
+        const areaTop = area ? area.getBoundingClientRect().top : 0;
+        const viewH = area ? area.clientHeight : window.innerHeight;
+        const midLine = areaTop + viewH * 0.5;
         let current = 0;
         for (const el of paras) {
-          if (el.getBoundingClientRect().top < window.innerHeight * 0.5) {
+          if (el.getBoundingClientRect().top < midLine) {
             current = Number(el.dataset.para);
           }
         }

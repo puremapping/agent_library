@@ -82,15 +82,16 @@ app.post("/api/books", upload.single("file"), (req, res) => {
 });
 
 app.get("/api/books", (req, res) => {
+  const agent = resolveAgent(req);
   const books = db
     .prepare(
       `SELECT b.id, b.title, b.word_count, b.created_at,
               COALESCE(p.paragraph, 0) AS progress_paragraph
        FROM books b
-       LEFT JOIN progress p ON p.book_id = b.id
+       LEFT JOIN progress p ON p.book_id = b.id AND p.agent_id = ?
        ORDER BY b.created_at DESC`
     )
-    .all();
+    .all(agent?.id ?? null);
   res.json(markUntrusted(books));
 });
 
@@ -98,10 +99,10 @@ app.get("/api/books/:id", (req, res) => {
   const book = db.prepare("SELECT * FROM books WHERE id = ?").get(req.params.id);
   if (!book) return res.status(404).json({ error: "书不存在" });
 
-  const progress = db.prepare("SELECT * FROM progress WHERE book_id = ?").get(book.id);
+  const agent = resolveAgent(req);
+  const progress = db.prepare("SELECT * FROM progress WHERE book_id = ? AND agent_id = ?").get(book.id, agent?.id ?? null);
   const highlights = db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
   const notes = db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
-  const agent = resolveAgent(req);
 
   res.json({
     ...book,
@@ -119,10 +120,11 @@ app.put("/api/books/:id/progress", (req, res) => {
   if (!paragraphWithinRange(req.params.id, paragraph))
     return res.status(400).json({ error: "paragraph 超出正文范围" });
 
+  const agent = resolveAgent(req);
   db.prepare(
-    `INSERT INTO progress (book_id, paragraph, updated_at) VALUES (?, ?, datetime('now'))
-     ON CONFLICT(book_id) DO UPDATE SET paragraph = excluded.paragraph, updated_at = datetime('now')`
-  ).run(req.params.id, paragraph);
+    `INSERT INTO progress (book_id, agent_id, paragraph, updated_at) VALUES (?, ?, ?, datetime('now'))
+     ON CONFLICT(book_id, agent_id) DO UPDATE SET paragraph = excluded.paragraph, updated_at = datetime('now')`
+  ).run(req.params.id, agent?.id ?? null, paragraph);
 
   res.json({ ok: true });
 });
