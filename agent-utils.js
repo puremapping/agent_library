@@ -76,8 +76,9 @@ export function getAgent(id) {
   return sanitize(db.prepare("SELECT * FROM agents WHERE id = ?").get(id));
 }
 
-export function listAgents() {
-  return db.prepare("SELECT id, name, password, is_admin, created_at FROM agents ORDER BY id").all().map((a) => {
+export function listAgents(includeEmail = false) {
+  const cols = includeEmail ? "id, name, password, is_admin, email, created_at" : "id, name, password, is_admin, created_at";
+  return db.prepare(`SELECT ${cols} FROM agents ORDER BY id`).all().map((a) => {
     const { password, ...rest } = a;
     return { ...rest, has_password: !!password, is_admin: !!a.is_admin };
   });

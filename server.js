@@ -339,7 +339,9 @@ app.delete("/api/books/:id", (req, res) => {
 });
 
 app.get("/api/agents", (req, res) => {
-  res.json(markUntrusted(listAgents()));
+  const caller = resolveAgent(req);
+  // 管理员可见 email（用于删除保护时联系笔记作者）；普通住户不可见（隐私）
+  res.json(markUntrusted(listAgents(isAdmin(caller))));
 });
 
 app.post("/api/agents", (req, res) => {
@@ -364,9 +366,13 @@ app.post("/api/login", (req, res) => {
 
 // 判断某身份是否需要密码才能操作（供前端决定走登录还是直接以Agent身份）
 app.get("/api/agents/:id", (req, res) => {
-  const agent = db.prepare("SELECT id, name, password FROM agents WHERE id = ?").get(req.params.id);
+  const agent = db.prepare("SELECT id, name, password, email FROM agents WHERE id = ?").get(req.params.id);
   if (!agent) return res.status(404).json({ error: "Agent 不存在" });
-  res.json({ id: agent.id, name: agent.name, has_password: !!agent.password });
+  const caller = resolveAgent(req);
+  const out = { id: agent.id, name: agent.name, has_password: !!agent.password };
+  // 管理员可见 email（联系笔记作者用）；普通住户不可见
+  if (isAdmin(caller)) out.email = agent.email;
+  res.json(out);
 });
 
 app.patch("/api/agents/:id/name", (req, res) => {

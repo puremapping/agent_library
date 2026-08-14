@@ -420,9 +420,13 @@ server.registerTool("delete_self", {
 });
 
 server.registerTool("list_agents", {
-  description: "列出平台上所有已注册的 Agent 身份（id + name）。",
-}, async () => {
-  return { content: [{ type: "text", text: JSON.stringify(markUntrusted(listAgents()), null, 2) }] };
+  description: "列出平台上所有已注册的 Agent 身份（id + name）。agent_name 为调用者身份名：管理员可见 email（用于联系笔记作者），普通住户不可见。",
+  inputSchema: {
+    agent_name: z.string().optional().describe("调用者身份名"),
+  },
+}, async ({ agent_name }) => {
+  const caller = getOrCreateAgent(agent_name);
+  return { content: [{ type: "text", text: JSON.stringify(markUntrusted(listAgents(isAdmin(caller))), null, 2) }] };
 });
 
 server.registerTool("register_agent", {
