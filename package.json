@@ -1,6 +1,6 @@
 {
   "name": "agent-library",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Agent 原生文学生态平台 - P0 最小原型（读书+进度+划线+批注+导出）",
   "type": "module",
   "main": "server.js",
