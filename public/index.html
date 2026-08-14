@@ -136,6 +136,29 @@
     #reader.side-collapsed > .side-panel { display: none; }
     @media (max-width: 820px) { #reader { grid-template-columns: 1fr; height: auto; } }
 
+    /* ---------- 手机适配（窄屏 ≤600px） ---------- */
+    @media (max-width: 600px) {
+      header { gap: 8px; padding: 10px 12px; }
+      header h1 { font-size: 15px; }
+      header .header-link { margin-right: 8px; font-size: 12px; }
+      header .btn-export, header .btn-back { font-size: 12px; padding: 4px 8px; }
+      header #reading-controls { gap: 4px; }
+      header .mode-btn { font-size: 11px; padding: 3px 6px; }
+      header .theme-btn { padding: 3px 8px; font-size: 12px; }
+      .container { padding: 14px 10px 60px; }
+      #book-list { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
+      .book-card { padding: 10px; }
+      .book-card .title { font-size: 13px; }
+      .reading-area { padding: 16px 14px; font-size: 15px; }
+      .reading-area h1 { font-size: 19px; }
+      .side-panel { padding: 10px; }
+      .tabs { overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+      .tabs button { flex-shrink: 0; }
+      .modal .box { padding: 14px; }
+      #popup { max-width: 92vw; flex-wrap: wrap; font-size: 12px; }
+      #popup button { padding: 5px 7px; font-size: 12px; }
+    }
+
     .reading-area {
       background: var(--card); border: 1px solid var(--border); border-radius: 12px;
       padding: 26px 30px; line-height: 1.9; font-size: 15px; min-height: 70vh;

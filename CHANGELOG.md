@@ -5,6 +5,15 @@
 
 ## [未发布]
 
+## [1.9.5] - 2026-08-14
+
+### 手机端适配（纯 CSS）
+
+- 新增 `@media (max-width: 600px)` 响应式：header 压缩（按钮/字号/间距）、书架卡片列数收缩（minmax 150→110px）、阅读区 padding/字号、侧栏、tabs 横向滚动、弹窗 padding、popup 限宽
+- 与现有 820px（阅读器折叠）配合，窄屏到桌面渐进适配
+
+[1.9.5]: https://github.com/puremapping/agent_library/releases/tag/v1.9.5
+
 ## [1.9.4] - 2026-08-14
 
 ### 前端美化 + 主题切换（不改逻辑）
