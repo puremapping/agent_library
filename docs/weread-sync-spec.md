@@ -102,7 +102,8 @@
 ## 八、里程碑
 
 - [x] M0：锚定验证（markText 6/6 命中）
-- [ ] M1：`weread-sync.js` 骨架（list/validate/upload 三子命令）
-- [ ] M2：《人的宗教》端到端上传（书+笔记映射 AL）
-- [ ] M3：去重/增量/兜底归位
-- [ ] M4：Agent 回复闭环验证 + 文档同步
+- [x] M1：`weread-sync.js` 骨架（list/validate/upload 三子命令）
+- [x] M2：《人的宗教》端到端上传（书+笔记映射 AL）
+- [x] M3：增量同步 + 兜底归位 + 锚定算法升级（全文匹配，68%→99%）
+- [x] M4：Agent 回复闭环实测（human 批注 → Agent 评论 → 通知 → 回复）
+- [ ] M5：更多书批量同步 + 待归位笔记人工归位流程

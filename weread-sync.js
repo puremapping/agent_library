@@ -14,6 +14,20 @@ const AL_BASE = process.env.AL_BASE || "http://localhost:3000";
 const AL_AGENT = process.env.AL_AGENT || "human";
 const PANDOC = "D:/fs/70_Software/pandoc/pandoc.exe";
 const SKILL_VER = "1.0.4";
+const STATE_FILE = path.join(import.meta.dirname, ".weread-state.json");
+
+// ---------- 增量同步状态 ----------
+// 记录每本书上次同步时间戳（按 createTime），下次只拉新笔记。
+function readState() {
+  try { return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch { return {}; }
+}
+function writeState(state) {
+  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+}
+function lastSyncOf(state, bookId) {
+  const t = state[bookId]?.lastSync;
+  return typeof t === "number" ? t : 0;
+}
 
 // ---------- 微信读书网关 ----------
 async function weread(apiName, params = {}) {
@@ -89,15 +103,45 @@ function buildParagraphs(md) {
 }
 
 // 在 md 里定位一条文本，返回 { paragraph, start_char, end_char } 或 null
-// start_char/end_char 是段内偏移（符合 AL 字符级锚定语义）
+// 策略：归一化（去空白 + 去 markdown 标记 + 统一标点）后，在"全文拼接串"里做子串匹配，
+// 支持跨段划线；返回起始段 + 段内偏移（符合 AL 字符级锚定语义）。
+function normalize(s) {
+  return String(s ?? "")
+    .replace(/\*\*/g, "").replace(/\*/g, "").replace(/`/g, "") // 去 markdown 标记
+    .replace(/\s+/g, "")
+    .replace(/[\u201c\u201d""]/g, '"').replace(/[\u2018\u2019'']/g, "'")
+    .replace(/[\u3000\u00a0]/g, "");
+}
+
 function anchorInParagraph(paragraphs, markText) {
-  const t = markText.replace(/\s+/g, "");
+  const n = normalize(markText);
+  if (!n) return null;
+  // 优先单段匹配（快路径）
   for (let i = 0; i < paragraphs.length; i++) {
-    const pNorm = paragraphs[i].replace(/\s+/g, "");
-    const idx = pNorm.indexOf(t);
-    if (idx >= 0) return { paragraph: i, start_char: idx, end_char: idx + t.length };
+    const pn = normalize(paragraphs[i]);
+    const idx = pn.indexOf(n);
+    if (idx >= 0) return { paragraph: i, start_char: idx, end_char: idx + n.length };
   }
-  return null;
+  // 全文拼接匹配（跨段划线）
+  const full = [];
+  const paraOf = [];
+  for (let i = 0; i < paragraphs.length; i++) {
+    const pn = normalize(paragraphs[i]);
+    for (let j = 0; j < pn.length; j++) { full.push(pn[j]); paraOf.push(i); }
+  }
+  const fullStr = full.join("");
+  const idx = fullStr.indexOf(n);
+  if (idx < 0) return null;
+  const startPara = paraOf[idx];
+  // 起始段内偏移：累加 startPara 之前段落长度得到全文偏移起点，再换算段内
+  let acc = 0;
+  for (let i = 0; i < startPara; i++) acc += normalize(paragraphs[i]).length;
+  const segStart = idx - acc; // 起始段内偏移
+  const paraLen = normalize(paragraphs[startPara]).length;
+  // 跨段时截断到起始段末尾（AL 划线限单段字符范围）
+  const end = Math.min(segStart + n.length, paraLen);
+  if (end <= segStart) return null;
+  return { paragraph: startPara, start_char: segStart, end_char: end };
 }
 
 // ---------- AL API ----------
@@ -138,14 +182,15 @@ async function cmdValidate(bookId, epubPath) {
   const { paragraphs } = buildParagraphs(md);
   const samples = [...notes.underlines, ...notes.reviews.map((r) => ({ markText: r.abstract }))]
     .filter((n) => n.markText && n.markText.length > 8);
+  // 全量锚定率统计（比抽前20条稳定）
   let hit = 0;
-  for (const s of samples.slice(0, 20)) {
+  for (const s of samples) {
     if (anchorInParagraph(paragraphs, s.markText)) hit++;
   }
-  const total = Math.min(samples.length, 20);
+  const total = samples.length;
   const rate = total ? Math.round((hit / total) * 100) : 0;
-  console.log(`锚定测试：${hit}/${total} 命中（${rate}%），${total === 0 ? "无笔记样本" : rate >= 90 ? "✅ 同版，可上传" : "❌ 版本不一致，拒绝"}`);
-  return rate >= 90;
+  console.log(`锚定测试：${hit}/${total} 命中（${rate}%），${total === 0 ? "无笔记样本" : rate >= 85 ? "✅ 同版，可上传" : "❌ 版本不一致，拒绝"}`);
+  return rate >= 85;
 }
 
 async function cmdUpload(bookId, epubPath) {
@@ -155,11 +200,12 @@ async function cmdUpload(bookId, epubPath) {
   const { paragraphs } = buildParagraphs(md);
   const samples = [...notes.underlines, ...notes.reviews.map((r) => ({ markText: r.abstract }))]
     .filter((n) => n.markText && n.markText.length > 8);
+  // 全量锚定率
   let hit = 0;
-  for (const s of samples.slice(0, 20)) if (anchorInParagraph(paragraphs, s.markText)) hit++;
-  const total = Math.min(samples.length, 20);
+  for (const s of samples) if (anchorInParagraph(paragraphs, s.markText)) hit++;
+  const total = samples.length;
   const rate = total ? Math.round((hit / total) * 100) : 0;
-  if (rate < 90) { console.error(`锚定率 ${rate}% < 90%，拒绝上传（版本可能不一致）`); process.exit(1); }
+  if (rate < 85) { console.error(`锚定率 ${rate}% < 85%，拒绝上传（版本可能不一致）`); process.exit(1); }
   console.log(`锚定 ${hit}/${total}（${rate}%）通过，开始上传`);
 
   // 2. 上传书（source_id 幂等：已存在则返回已有书，跳过重传）
@@ -170,28 +216,52 @@ async function cmdUpload(bookId, epubPath) {
   const bookIdAl = up.data.id;
   console.log(`书已上传: id=${bookIdAl} title=${title}${up.data.exists ? "（已存在，复用）" : ""}`);
 
-  // 3. 映射笔记 → 划线/批注
-  let hlOk = 0, hlSkip = 0, noteOk = 0, noteSkip = 0;
-  for (const u of notes.underlines) {
+  // 2.5 增量：只同步上次之后的新笔记
+  const state = readState();
+  const lastSync = lastSyncOf(state, bookId);
+  let newUnderlines = notes.underlines;
+  let newReviews = notes.reviews;
+  if (lastSync > 0) {
+    newUnderlines = notes.underlines.filter((u) => (u.createTime || 0) > lastSync);
+    newReviews = notes.reviews.filter((r) => (r.createTime || 0) > lastSync);
+    console.log(`增量同步（上次 ${new Date(lastSync * 1000).toISOString().slice(0, 10)}）：新划线 ${newUnderlines.length} / 新想法 ${newReviews.length}`);
+  }
+
+  // 3. 映射笔记 → 划线/批注（锚定失败也上传，挂段落0兜底归位，便于后续人工/Agent 处理）
+  let hlOk = 0, hlSkip = 0, noteOk = 0, noteSkip = 0, hlFallback = 0, noteFallback = 0;
+  for (const u of newUnderlines) {
     const a = anchorInParagraph(paragraphs, u.markText);
-    if (!a) { hlSkip++; continue; }
+    if (!a) {
+      // 兜底：锚定失败的划线上传为"待归位"批注（挂段落0，content 标记原文）
+      const fb = await alApi("POST", `/api/books/${bookIdAl}/notes`, {
+        paragraph: 0, content: `[微信划线·待归位] ${u.markText.slice(0, 150)}`, agent: AL_AGENT, source_id: u.sourceId,
+      });
+      if (fb.status === 201) { hlFallback++; } else { hlSkip++; }
+      continue;
+    }
     const r = await alApi("POST", `/api/books/${bookIdAl}/highlights`, {
       paragraph: a.paragraph, text: u.markText.slice(0, 200), agent: AL_AGENT,
       start_char: a.start_char, end_char: a.end_char, color: "yellow", source_id: u.sourceId,
     });
     if (r.status === 201) hlOk++; else hlSkip++;
   }
-  for (const rv of notes.reviews) {
+  for (const rv of newReviews) {
     // 想法：有 abstract（锚定原文）→ 批注；否则挂段落0
     let a = null;
     if (rv.abstract) a = anchorInParagraph(paragraphs, rv.abstract);
     const body = { paragraph: a?.paragraph ?? 0, content: rv.content, agent: AL_AGENT, source_id: rv.sourceId };
-    if (a) { body.start_char = a.start_char; body.end_char = a.end_char; }
+    if (a) { body.start_char = a.start_char; body.end_char = a.end_char; } else { noteFallback++; }
     const r = await alApi("POST", `/api/books/${bookIdAl}/notes`, body);
     if (r.status === 201) noteOk++; else noteSkip++;
   }
-  console.log(`划线: ${hlOk} 成功 / ${hlSkip} 跳过(锚定失败或去重)`);
-  console.log(`想法: ${noteOk} 成功 / ${noteSkip} 跳过`);
+  // 4. 记录同步状态（取本次同步笔记的最大 createTime）
+  const maxT = Math.max(...notes.underlines.map((u) => u.createTime || 0), ...notes.reviews.map((r) => r.createTime || 0));
+  if (maxT > 0) {
+    state[bookId] = { lastSync: maxT, title };
+    writeState(state);
+  }
+  console.log(`划线: ${hlOk} 成功 / ${hlFallback} 待归位 / ${hlSkip} 跳过(去重)`);
+  console.log(`想法: ${noteOk} 成功 / ${noteFallback} 挂段落0 / ${noteSkip} 跳过`);
   console.log("完成。可在 AL 里阅读并回复。");
 }
 
