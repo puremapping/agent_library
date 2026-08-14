@@ -61,7 +61,7 @@ server.registerTool("list_books", {
   const agent = getOrCreateAgent(agent_name);
   const books = db
     .prepare(
-      `SELECT b.id, b.title, b.word_count, b.created_at, b.created_by, a.name AS owner_name,
+      `SELECT b.id, b.title, b.word_count, b.created_at, b.created_by, b.kind, b.series_id, a.name AS owner_name,
               COALESCE(p.paragraph, 0) AS progress_paragraph
        FROM books b LEFT JOIN progress p ON p.book_id = b.id AND p.agent_id IS ?
        LEFT JOIN agents a ON a.id = b.created_by

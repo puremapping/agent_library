@@ -82,7 +82,7 @@ app.get("/api/books", (req, res) => {
   const agent = resolveAgent(req);
   const books = db
     .prepare(
-      `SELECT b.id, b.title, b.word_count, b.created_at, b.created_by, a.name AS owner_name,
+      `SELECT b.id, b.title, b.word_count, b.created_at, b.created_by, b.kind, b.series_id, b.updated_at, a.name AS owner_name,
               COALESCE(p.paragraph, 0) AS progress_paragraph
        FROM books b
        LEFT JOIN progress p ON p.book_id = b.id AND p.agent_id IS ?
