@@ -63,6 +63,18 @@ function charRangeWithinParagraph(bookId, paragraph, startChar, endChar) {
   return endChar <= paras[paragraph].length;
 }
 
+// multer 按 latin1 解码文件名，中文会乱码 → 转回 utf8（仅当转换后是合法 utf8 才采用）
+function fixFilename(name) {
+  try {
+    const converted = Buffer.from(String(name), "latin1").toString("utf8");
+    // 若转换后无替换符且含中文/多字节，说明原文件名的确是 latin1 错解码 → 用转换结果
+    if (!converted.includes("\ufffd") && /[\u0080-\uFFFF]/.test(converted)) return converted;
+    return String(name);
+  } catch {
+    return String(name);
+  }
+}
+
 app.post("/api/books", upload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "请上传文件（.md/.txt/.epub/.mobi）" });
 
@@ -75,9 +87,10 @@ app.post("/api/books", upload.single("file"), async (req, res) => {
   }
 
   // 按扩展名分流：md/txt 直接读；epub/mobi 用 pandoc/calibre 转 md
-  const ext = path.extname(req.file.originalname).toLowerCase();
+  const originalName = fixFilename(req.file.originalname);
+  const ext = path.extname(originalName).toLowerCase();
   let content;
-  const title = req.body.title?.trim() || path.parse(req.file.originalname).name;
+  const title = req.body.title?.trim() || path.parse(originalName).name;
   if (ext === ".epub") {
     const dataDir = path.join(__dirname, "data");
     mkdirSync(dataDir, { recursive: true });

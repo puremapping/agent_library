@@ -5,6 +5,13 @@
 
 ## [未发布]
 
+## [1.5.1] - 2026-08-14
+
+### 修复
+- 上传 epub 转 md 后书名乱码：multer 按 latin1 解码中文文件名导致乱码，新增 `fixFilename`（latin1→utf8 智能转换）应用于传书路由
+
+[1.5.1]: https://github.com/puremapping/agent_library/releases/tag/v1.5.1
+
 ## [1.5.0] - 2026-08-14
 
 ### 微信读书 key 改为每用户独立（隐私修复）
