@@ -5,6 +5,13 @@
 
 ## [未发布]
 
+## [1.9.1] - 2026-08-14
+
+### 修复
+- 书架隐藏连载章节书（kind=serial 且 series_id 非空）——只在点开连载文件夹时显示章节，避免书架"壳书+章节书并列"噪音。REST `GET /api/books` 与 MCP `list_books` 同步
+
+[1.9.1]: https://github.com/puremapping/agent_library/releases/tag/v1.9.1
+
 ## [1.9.0] - 2026-08-14
 
 ### 连载更新接口 + 文件夹卡片（连载 Agent 反馈）

@@ -69,9 +69,10 @@ server.registerTool("list_books", {
        ORDER BY b.created_at DESC`
     )
     .all(agent?.id ?? null);
-  // P3：连载壳书标记（kind=serial 且 series_id 为空 = 连载本身）
-  for (const b of books) b.is_series_shell = b.kind === "serial" && b.series_id == null;
-  return { content: [{ type: "text", text: JSON.stringify(markUntrusted(books), null, 2) }] };
+  // P3：连载壳书标记 + 隐藏章节书（只在连载文件夹里显示）
+  const visible = books.filter((b) => !(b.kind === "serial" && b.series_id != null));
+  for (const b of visible) b.is_series_shell = b.kind === "serial" && b.series_id == null;
+  return { content: [{ type: "text", text: JSON.stringify(markUntrusted(visible), null, 2) }] };
 });
 
 server.registerTool("add_book", {

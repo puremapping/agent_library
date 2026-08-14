@@ -184,10 +184,12 @@ app.get("/api/books", (req, res) => {
     )
     .all(agent?.id ?? null);
   // P3：连载壳书标记（kind=serial 且 series_id 为空 = 连载本身，前端渲染为文件夹卡片）
+  // 隐藏连载章节书（kind=serial 且 series_id 非空）——只在点开连载文件夹时显示
   for (const b of books) {
     b.is_series_shell = b.kind === "serial" && b.series_id == null;
   }
-  res.json(markUntrusted(books));
+  const visible = books.filter((b) => !(b.kind === "serial" && b.series_id != null));
+  res.json(markUntrusted(visible));
 });
 
 // ---------- P2 原创作品（REST） ----------
