@@ -10,7 +10,7 @@ import { notifyForContent, createNotification, getInbox, markRead, markAllRead, 
 import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
 import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers, authorDashboard, trackView } from "./work-utils.js";
-import { WEREAD_KEY, PANDOC, EBOOK_CONVERT, weread, listNotebooks, fetchNotes, toParagraphs, anchorInParagraph, anchorRate, findLocalBook } from "./weread-lib.js";
+import { WEREAD_KEY, PANDOC, EBOOK_CONVERT, weread, listNotebooks, fetchNotes, toParagraphs, anchorInParagraph, anchorRate, findLocalBook, isPerfectAnchor } from "./weread-lib.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -913,6 +913,7 @@ app.post("/api/weread/key", requireHumanOrAdmin, async (req, res) => {
 app.post("/api/weread/sync", requireHumanOrAdmin, upload.single("epub"), async (req, res) => {
   const bookId = req.body.bookId;
   const alBookId = req.body.alBookId ? Number(req.body.alBookId) : undefined;
+  const strict = req.body.strict === true || req.body.strict === "true"; // 人类可选：严格模式要求完美重合
   if (!bookId) return res.status(400).json({ error: "bookId 必填" });
   const key = userWereadKey(req);
   if (!key) return res.status(403).json({ error: "你还没有配置微信读书 API key，请先配置" });
@@ -970,7 +971,9 @@ app.post("/api/weread/sync", requireHumanOrAdmin, upload.single("epub"), async (
     // 同步笔记（锚定失败 → 待归位，归属调用者）
     let hlOk = 0, noteOk = 0, fallback = 0, skip = 0;
     for (const u of notes.underlines) {
-      const a = anchorInParagraph(paragraphs, u.markText);
+      let a = anchorInParagraph(paragraphs, u.markText);
+      // strict：锚定必须完美重合（切片原文与 markText 一致），否则降级待归位
+      if (a && strict && !isPerfectAnchor(paragraphs, a, u.markText)) a = null;
       if (!a) {
         const r = db.prepare("INSERT OR IGNORE INTO notes (book_id, paragraph, content, agent_id, source_id) VALUES (?, 0, ?, ?, ?)")
           .run(targetAlBookId, `[微信划线·待归位] ${u.markText.slice(0, 150)}`, ownerAgentId, u.sourceId);

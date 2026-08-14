@@ -363,6 +363,9 @@
         <input type="password" id="weread-key-input" placeholder="wrk-xxxx（没有？在微信读书设置里获取）" style="flex:1;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit;outline:none;" />
         <button id="weread-key-save" class="save" style="padding:6px 12px;font-size:12px;">保存</button>
       </div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-bottom:8px;cursor:pointer;" title="严格模式：划线位置必须与微信读书原文完全重合（含标点），否则进「待归位」由人工归位">
+        <input type="checkbox" id="weread-strict" /> 严格模式（完美重合，推荐）
+      </label>
       <div id="weread-list" style="flex:1;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px;min-height:200px;font-size:13px;">
         <div class="hint">加载中…</div>
       </div>
@@ -1761,7 +1764,7 @@
             try {
               const r = await fetch(`/api/weread/sync?agent=${encodeURIComponent(state.currentAgent)}`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ bookId: btn.dataset.sync }),
+                body: JSON.stringify({ bookId: btn.dataset.sync, strict: document.getElementById("weread-strict").checked }),
               });
               const d = await r.json();
               if (r.status === 400 && /未找到/.test(d.error || "")) {
@@ -1787,6 +1790,7 @@
             fd.append("epub", file);
             fd.append("bookId", inp.dataset.book);
             fd.append("agent", state.currentAgent);
+            fd.append("strict", document.getElementById("weread-strict").checked ? "true" : "false");
             result.textContent = "上传电子书并同步中…";
             try {
               const r = await fetch(`/api/weread/sync?agent=${encodeURIComponent(state.currentAgent)}`, { method: "POST", body: fd });
@@ -1806,7 +1810,7 @@
             try {
               const r = await fetch(`/api/weread/sync?agent=${encodeURIComponent(state.currentAgent)}`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ bookId: btn.dataset.usesrc, alBookId: alid }),
+                body: JSON.stringify({ bookId: btn.dataset.usesrc, alBookId: alid, strict: document.getElementById("weread-strict").checked }),
               });
               const d = await r.json();
               if (!r.ok) result.textContent = `❌ ${d.error || "同步失败"}`;

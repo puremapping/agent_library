@@ -96,15 +96,43 @@ export function toParagraphs(content) {
   return String(content || "").split(/\r?\n/).filter((p) => p.trim().length > 0).map((p) => p.trim());
 }
 
-// 锚定：单段优先，全文拼接兜底（支持跨段），返回 {paragraph, start_char, end_char}
+// 在原始段落里精确定位 markText，返回 {start, end}（原始字符偏移，完美重合）
+// 优先原始精确匹配；失败则用归一化映射换算回原始位置（处理空白/引号差异）
+function exactAnchor(rawPara, markText) {
+  const raw = String(rawPara ?? "");
+  // 1. 原始精确匹配（先试 markText 原文，再试去空白版本）
+  let idx = raw.indexOf(markText);
+  if (idx < 0) idx = raw.indexOf(markText.replace(/\s+/g, ""));
+  if (idx >= 0) return { start: idx, end: idx + markText.replace(/\s+/g, "").length };
+
+  // 2. 归一化匹配 + 映射回原始位置
+  //    构建"归一化字符 → 原始偏移"映射（每段）
+  const normChars = [];
+  const rawOffsets = [];
+  for (let j = 0; j < raw.length; j++) {
+    const c = raw[j];
+    const nc = normalize(c);
+    if (nc) { normChars.push(nc); rawOffsets.push(j); }
+  }
+  const normStr = normChars.join("");
+  const nMark = normalize(markText);
+  const ni = normStr.indexOf(nMark);
+  if (ni < 0) return null;
+  const start = rawOffsets[ni];
+  const endRaw = rawOffsets[ni + nMark.length - 1] + 1;
+  return { start, end: endRaw };
+}
+
+// 锚定：单段优先，全文拼接兜底（支持跨段）。返回 {paragraph, start_char, end_char}（原始偏移，完美重合）
 export function anchorInParagraph(paragraphs, markText) {
   const n = normalize(markText);
   if (!n) return null;
+  // 1. 单段精确匹配（优先）
   for (let i = 0; i < paragraphs.length; i++) {
-    const pn = normalize(paragraphs[i]);
-    const idx = pn.indexOf(n);
-    if (idx >= 0) return { paragraph: i, start_char: idx, end_char: idx + n.length };
+    const exact = exactAnchor(paragraphs[i], markText);
+    if (exact) return { paragraph: i, start_char: exact.start, end_char: exact.end };
   }
+  // 2. 全文拼接匹配（跨段划线）—— 取起始段
   const full = [];
   const paraOf = [];
   for (let i = 0; i < paragraphs.length; i++) {
@@ -115,13 +143,26 @@ export function anchorInParagraph(paragraphs, markText) {
   const idx = fullStr.indexOf(n);
   if (idx < 0) return null;
   const startPara = paraOf[idx];
+  // 用起始段的原始文本精确定位
+  const rawPara = paragraphs[startPara];
+  const exact = exactAnchor(rawPara, n);
+  if (exact) return { paragraph: startPara, start_char: exact.start, end_char: exact.end };
+  // 兜底：段内归一化换算
   let acc = 0;
   for (let i = 0; i < startPara; i++) acc += normalize(paragraphs[i]).length;
   const segStart = idx - acc;
-  const paraLen = normalize(paragraphs[startPara]).length;
+  const paraLen = normalize(rawPara).length;
   const end = Math.min(segStart + n.length, paraLen);
   if (end <= segStart) return null;
   return { paragraph: startPara, start_char: segStart, end_char: end };
+}
+
+// 是否完美重合：锚定位置切出的原文与 markText 归一化后一致
+export function isPerfectAnchor(paragraphs, anchor, markText) {
+  if (!anchor) return false;
+  const raw = paragraphs[anchor.paragraph] || "";
+  const sliced = raw.slice(anchor.start_char, anchor.end_char);
+  return normalize(sliced) === normalize(markText);
 }
 
 // 锚定率（全量，用于门槛判断）
