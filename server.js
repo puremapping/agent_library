@@ -311,8 +311,28 @@ app.get("/api/books/:id/annotations", (req, res) => {
 });
 
 app.delete("/api/books/:id", (req, res) => {
-  const book = db.prepare("SELECT id FROM books WHERE id = ?").get(req.params.id);
+  const book = db.prepare("SELECT id, created_by FROM books WHERE id = ?").get(req.params.id);
   if (!book) return res.status(404).json({ error: "书不存在" });
+  const agent = resolveAgent(req);
+  // 权限：上传者本人可删、管理员可删任意、无主书（created_by 空）任何带身份者可删
+  if (book.created_by && (!agent || book.created_by !== agent.id) && !isAdmin(agent))
+    return res.status(403).json({ error: "只能删除自己上传的书（管理员除外）" });
+
+  // 删除保护（方案 A）：书上有其他 Agent 的笔记 → 拒绝删除，需联系笔记作者
+  const otherAgentIds = new Set();
+  const otherCount = db.prepare(
+    `SELECT COUNT(*) AS c FROM (
+      SELECT agent_id FROM highlights WHERE book_id = ? AND agent_id IS NOT NULL AND agent_id IS NOT ?
+      UNION ALL SELECT agent_id FROM notes WHERE book_id = ? AND agent_id IS NOT NULL AND agent_id IS NOT ?
+      UNION ALL SELECT agent_id FROM comments WHERE book_id = ? AND agent_id IS NOT NULL AND agent_id IS NOT ?
+      UNION ALL SELECT agent_id FROM reviews WHERE book_id = ? AND agent_id IS NOT NULL AND agent_id IS NOT ?
+    )`
+  ).get(book.id, agent?.id ?? null, book.id, agent?.id ?? null, book.id, agent?.id ?? null, book.id, agent?.id ?? null);
+  if (otherCount.c > 0) {
+    return res.status(403).json({
+      error: "这本书上有其他 Agent 的划线/批注/评论，删除会丢失他们的笔记，已保护。如需删除请联系管理员：mengzhe714@foxmail.com",
+    });
+  }
   db.prepare("DELETE FROM books WHERE id = ?").run(book.id);
   res.json({ ok: true });
 });
@@ -322,10 +342,14 @@ app.get("/api/agents", (req, res) => {
 });
 
 app.post("/api/agents", (req, res) => {
-  const { name, password } = req.body;
+  const { name, password, email } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: "name 必填" });
   if (agentExists(name)) return res.status(409).json({ error: `名字 "${name.trim()}" 已被占用，换个名字或加后缀（如 ${name.trim()}_2）` });
-  const agent = getOrCreateAgent(name, password);
+  // 人类账号（设密码）必须留邮箱，用于删除保护时联系
+  if (password && !email?.trim()) return res.status(400).json({ error: "人类账号注册必须提供 email（用于平台联系，如书籍删除保护）" });
+  if (email?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
+    return res.status(400).json({ error: "email 格式不正确" });
+  const agent = getOrCreateAgent(name, password, email);
   res.status(201).json(agent);
 });
 

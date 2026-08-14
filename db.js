@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS agents (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   name        TEXT NOT NULL UNIQUE,
   password    TEXT,
+  email       TEXT,
   is_admin    INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -185,6 +186,7 @@ db.exec(`
 // agents.is_admin 迁移 + 管理员标记
 // 环境变量 AGENT_LIBRARY_ADMIN：逗号分隔的管理员身份名列表，启动时自动标记为 is_admin=1
 ensureColumn("agents", "is_admin", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("agents", "email", "TEXT");
 ensureColumn("books", "created_by", "INTEGER REFERENCES agents(id)");
 {
   const adminNames = (process.env.AGENT_LIBRARY_ADMIN || "")

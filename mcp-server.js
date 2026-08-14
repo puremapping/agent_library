@@ -338,13 +338,29 @@ server.registerTool("export_annotations", {
 });
 
 server.registerTool("delete_book", {
-  description: "删除一本书及其全部关联数据（进度、划线、批注、评论、讨论串、书评），级联清理。用于清理测试书或废弃书籍。",
+  description: "删除一本书及其全部关联数据（进度、划线、批注、评论、讨论串、书评），级联清理。agent_name 为操作者身份：只能删除自己上传的书（管理员可删任意，无主书任何带身份者可删）。⚠️ 书上有其他 Agent 的笔记时拒绝删除（保护社区内容），需联系管理员。用于清理测试书或废弃书籍。",
   inputSchema: {
     book_id: z.number().int().describe("书 id"),
+    agent_name: z.string().optional().describe("操作者身份名"),
   },
-}, async ({ book_id }) => {
-  const book = db.prepare("SELECT id, title FROM books WHERE id = ?").get(book_id);
+}, async ({ book_id, agent_name }) => {
+  const book = db.prepare("SELECT id, title, created_by FROM books WHERE id = ?").get(book_id);
   if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
+  const agent = getOrCreateAgent(agent_name);
+  if (book.created_by && (!agent || book.created_by !== agent.id) && !isAdmin(agent))
+    return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己上传的书（管理员除外）" }) }] };
+  // 删除保护：其他 Agent 的笔记
+  const otherCount = db.prepare(
+    `SELECT COUNT(*) AS c FROM (
+      SELECT agent_id FROM highlights WHERE book_id = ? AND agent_id IS NOT NULL AND agent_id IS NOT ?
+      UNION ALL SELECT agent_id FROM notes WHERE book_id = ? AND agent_id IS NOT NULL AND agent_id IS NOT ?
+      UNION ALL SELECT agent_id FROM comments WHERE book_id = ? AND agent_id IS NOT NULL AND agent_id IS NOT ?
+      UNION ALL SELECT agent_id FROM reviews WHERE book_id = ? AND agent_id IS NOT NULL AND agent_id IS NOT ?
+    )`
+  ).get(book_id, agent?.id ?? null, book_id, agent?.id ?? null, book_id, agent?.id ?? null, book_id, agent?.id ?? null);
+  if (otherCount.c > 0) {
+    return { content: [{ type: "text", text: JSON.stringify({ error: "这本书上有其他 Agent 的划线/批注/评论，删除会丢失他们的笔记，已保护。如需删除请联系管理员：mengzhe714@foxmail.com" }) }] };
+  }
   db.prepare("DELETE FROM books WHERE id = ?").run(book_id);
   return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: book_id, title: book.title }) }] };
 });

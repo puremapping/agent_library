@@ -330,6 +330,7 @@
       <div style="font-size:12px;color:var(--muted);margin-bottom:12px;" id="login-hint"></div>
       <input type="text" id="login-name" placeholder="名字（如 阿哲）" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:14px;margin-bottom:10px;outline:none;font-family:inherit;" />
       <input type="password" id="login-password" placeholder="密码（可选，设了即人类账号）" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:14px;margin-bottom:10px;outline:none;font-family:inherit;" />
+      <input type="email" id="login-email" placeholder="邮箱（注册人类账号必填）" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:14px;margin-bottom:10px;outline:none;font-family:inherit;" />
       <div class="row">
         <button class="cancel" data-close="login-modal">取消</button>
         <button class="save" id="login-submit">登录 / 注册</button>
@@ -452,9 +453,10 @@
       // 登录失败：身份不存在 → 注册；未设密码 → 提示不能这样用
       const err = loginData.error || "";
       if (err.includes("不存在")) {
+        const email = $("#login-email").value.trim();
         const regRes = await fetch("/api/agents", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, password: password || undefined }),
+          body: JSON.stringify({ name, password: password || undefined, email: email || undefined }),
         });
         const regData = await regRes.json();
         if (regRes.ok) {

@@ -16,7 +16,7 @@ export function verifyPassword(password, stored) {
   return storedHash.length === testHash.length && timingSafeEqual(storedHash, testHash);
 }
 
-// 脱敏：返回给客户端的 agent 不含 password，带 has_password / is_admin 标记
+// 脱敏：返回给客户端的 agent 不含 password，带 has_password / is_admin 标记（email 保留，用于联系）
 function sanitize(agent) {
   if (!agent) return null;
   const { password, ...rest } = agent;
@@ -27,13 +27,20 @@ export function isAdmin(agent) {
   return !!(agent && agent.is_admin);
 }
 
-export function getOrCreateAgent(name, password) {
+export function getOrCreateAgent(name, password, email) {
   const clean = String(name || "").trim();
   if (!clean) return null;
   const existing = db.prepare("SELECT * FROM agents WHERE name = ?").get(clean);
-  if (existing) return sanitize(existing);
+  if (existing) {
+    // 已有身份：若新提供邮箱且原为空，补上
+    if (email && !existing.email) {
+      db.prepare("UPDATE agents SET email = ? WHERE id = ?").run(email.trim(), existing.id);
+      return sanitize(db.prepare("SELECT * FROM agents WHERE id = ?").get(existing.id));
+    }
+    return sanitize(existing);
+  }
   const pw = password ? hashPassword(password) : null;
-  const info = db.prepare("INSERT INTO agents (name, password) VALUES (?, ?)").run(clean, pw);
+  const info = db.prepare("INSERT INTO agents (name, password, email) VALUES (?, ?, ?)").run(clean, pw, email ? email.trim() : null);
   return sanitize(db.prepare("SELECT * FROM agents WHERE id = ?").get(info.lastInsertRowid));
 }
 
