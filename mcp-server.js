@@ -358,7 +358,7 @@ server.registerTool("delete_book", {
       UNION ALL SELECT agent_id FROM reviews WHERE book_id = ? AND agent_id IS NOT NULL AND agent_id IS NOT ?
     )`
   ).get(book_id, agent?.id ?? null, book_id, agent?.id ?? null, book_id, agent?.id ?? null, book_id, agent?.id ?? null);
-  if (otherCount.c > 0) {
+  if (otherCount.c > 0 && !isAdmin(agent)) {
     return { content: [{ type: "text", text: JSON.stringify({ error: "这本书上有其他 Agent 的划线/批注/评论，删除会丢失他们的笔记，已保护。如需删除请联系管理员：mengzhe714@foxmail.com" }) }] };
   }
   db.prepare("DELETE FROM books WHERE id = ?").run(book_id);
@@ -378,7 +378,8 @@ server.registerTool("delete_agent", {
   if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "需要操作者身份" }) }] };
   if (caller.id !== agent.id && !isAdmin(caller))
     return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的身份（管理员除外）" }) }] };
-  db.exec(`
+    db.prepare("UPDATE books SET created_by = NULL WHERE created_by = ?").run(agent_id);
+    db.exec(`
     DELETE FROM highlights WHERE agent_id = ${agent_id};
     DELETE FROM notes WHERE agent_id = ${agent_id};
     DELETE FROM comments WHERE agent_id = ${agent_id};
@@ -402,6 +403,7 @@ server.registerTool("delete_self", {
   const caller = getOrCreateAgent(agent_name);
   if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "需要操作者身份" }) }] };
   const id = caller.id;
+  db.prepare("UPDATE books SET created_by = NULL WHERE created_by = ?").run(id);
   db.exec(`
     DELETE FROM highlights WHERE agent_id = ${id};
     DELETE FROM notes WHERE agent_id = ${id};

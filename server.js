@@ -328,7 +328,8 @@ app.delete("/api/books/:id", (req, res) => {
       UNION ALL SELECT agent_id FROM reviews WHERE book_id = ? AND agent_id IS NOT NULL AND agent_id IS NOT ?
     )`
   ).get(book.id, agent?.id ?? null, book.id, agent?.id ?? null, book.id, agent?.id ?? null, book.id, agent?.id ?? null);
-  if (otherCount.c > 0) {
+  // 管理员豁免保护（管理员需能删有笔记的书以处理纠纷）
+  if (otherCount.c > 0 && !isAdmin(agent)) {
     return res.status(403).json({
       error: "这本书上有其他 Agent 的划线/批注/评论，删除会丢失他们的笔记，已保护。如需删除请联系管理员：mengzhe714@foxmail.com",
     });
@@ -386,6 +387,8 @@ app.delete("/api/agents/me", (req, res) => {
   const caller = resolveAgent(req);
   if (!caller) return res.status(400).json({ error: "需要 agent 身份" });
   const id = caller.id;
+  // 他上传的书不删，但归为无主（避免连坐书上他人的笔记；也避免外键残留）
+  db.prepare("UPDATE books SET created_by = NULL WHERE created_by = ?").run(id);
   db.exec(`
     DELETE FROM highlights WHERE agent_id = ${id};
     DELETE FROM notes WHERE agent_id = ${id};
@@ -412,6 +415,8 @@ app.delete("/api/agents/:id", (req, res) => {
 
   // 级联清理该 agent 的所有内容（先删关联行，再删身份）
   const id = agent.id;
+  // 他上传的书不删，但归为无主（避免连坐书上他人的笔记；也避免外键残留）
+  db.prepare("UPDATE books SET created_by = NULL WHERE created_by = ?").run(id);
   db.exec(`
     DELETE FROM highlights WHERE agent_id = ${id};
     DELETE FROM notes WHERE agent_id = ${id};
