@@ -856,7 +856,7 @@ app.get("/api/agents/:id/following", (req, res) => {
 });
 
 // ---------- 微信读书同步（REST，供网页） ----------
-// 权限：仅管理员 或 带密码的人类身份（防止任何人用服务器 key 拉取）
+// 权限：仅管理员 或 带密码的人类身份；且使用请求者自己的 weread_api_key（不共享）
 function requireHumanOrAdmin(req, res, next) {
   const agent = resolveAgent(req);
   if (isAdmin(agent)) return next();
@@ -864,11 +864,19 @@ function requireHumanOrAdmin(req, res, next) {
   return res.status(403).json({ error: "仅限登录的人类用户或管理员操作微信同步" });
 }
 
-// 列出有笔记的书（需 WEREAD_API_KEY + 人类/管理员）
+// 取请求者自己的微信读书 key（不回落环境变量，避免全局共享泄露隐私）
+function userWereadKey(req) {
+  const agent = resolveAgent(req);
+  if (!agent) return null;
+  return db.prepare("SELECT weread_api_key FROM agents WHERE id = ?").get(agent.id)?.weread_api_key || null;
+}
+
+// 列出有笔记的书（需用户自己的 key + 人类/管理员）
 app.get("/api/weread/books", requireHumanOrAdmin, async (req, res) => {
   try {
-    if (!WEREAD_KEY) return res.status(503).json({ error: "服务器未配置 WEREAD_API_KEY" });
-    const books = await listNotebooks();
+    const key = userWereadKey(req);
+    if (!key) return res.status(403).json({ error: "你还没有配置微信读书 API key，请先配置（点右上角登录 → 在微信同步弹窗里填写）" });
+    const books = await listNotebooks(key);
     const list = books.filter((b) => b.noteCount + b.reviewCount > 0).map((b) => ({
       bookId: b.bookId, title: b.book?.title, noteCount: b.noteCount, reviewCount: b.reviewCount, format: b.book?.format,
     }));
@@ -878,18 +886,28 @@ app.get("/api/weread/books", requireHumanOrAdmin, async (req, res) => {
   }
 });
 
+// 配置/更新自己的微信读书 key（仅带密码的人类账号）
+app.post("/api/weread/key", requireHumanOrAdmin, async (req, res) => {
+  const { apiKey } = req.body;
+  if (!apiKey || !/^wrk-/.test(apiKey.trim())) return res.status(400).json({ error: "apiKey 格式不对（wrk- 开头）" });
+  const agent = resolveAgent(req);
+  db.prepare("UPDATE agents SET weread_api_key = ? WHERE id = ?").run(apiKey.trim(), agent.id);
+  res.json({ ok: true, message: "已保存你的微信读书 key" });
+});
+
 // 同步一本书的笔记
 // body: { bookId, alBookId?, epub? } — alBookId=场景一(挂已有书)；否则场景二(自动传书+笔记)；epub=上传的 epub 文件（multipart）
 app.post("/api/weread/sync", requireHumanOrAdmin, upload.single("epub"), async (req, res) => {
   const bookId = req.body.bookId;
   const alBookId = req.body.alBookId ? Number(req.body.alBookId) : undefined;
   if (!bookId) return res.status(400).json({ error: "bookId 必填" });
-  if (!WEREAD_KEY) return res.status(503).json({ error: "服务器未配置 WEREAD_API_KEY" });
+  const key = userWereadKey(req);
+  if (!key) return res.status(403).json({ error: "你还没有配置微信读书 API key，请先配置" });
   const caller = resolveAgent(req); // 笔记归属：调用者自己
   const ownerAgentId = caller?.id ?? null;
   try {
-    const notes = await fetchNotes(bookId);
-    const info = await weread("/book/info", { bookId });
+    const notes = await fetchNotes(bookId, key);
+    const info = await weread("/book/info", { bookId }, key);
     const title = info.title || bookId;
 
     let targetAlBookId = alBookId;

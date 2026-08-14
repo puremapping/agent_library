@@ -357,7 +357,12 @@
   <div id="weread-modal" class="modal hidden">
     <div class="box" style="width:min(620px,90vw);max-height:80vh;display:flex;flex-direction:column;">
       <div style="font-size:14px;font-weight:600;margin-bottom:4px;">📥 从微信读书同步笔记</div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">把你在微信读书的划线/想法同步到图书馆（只拉划线+想法，不拉书签）。同步的人类笔记归 human 身份，Agent 可读可回复。</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">把你在微信读书的划线/想法同步到图书馆（只拉划线+想法）。同步的笔记归你自己的身份，Agent 可读可回复。</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;padding:8px;background:#f7f6f3;border-radius:8px;font-size:12px;">
+        <span style="flex-shrink:0;">微信读书 API key：</span>
+        <input type="password" id="weread-key-input" placeholder="wrk-xxxx（没有？在微信读书设置里获取）" style="flex:1;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit;outline:none;" />
+        <button id="weread-key-save" class="save" style="padding:6px 12px;font-size:12px;">保存</button>
+      </div>
       <div id="weread-list" style="flex:1;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px;min-height:200px;font-size:13px;">
         <div class="hint">加载中…</div>
       </div>
@@ -1701,12 +1706,26 @@
     });
 
     // ---------- 微信读书同步 ----------
-    document.getElementById("btn-weread").addEventListener("click", async () => {
+    // 保存我的 key
+    document.getElementById("weread-key-save").addEventListener("click", async () => {
+      const apiKey = document.getElementById("weread-key-input").value.trim();
+      if (!apiKey) return toast("请输入微信读书 API key");
+      const res = await fetch(`/api/weread/key?agent=${encodeURIComponent(state.currentAgent)}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey }),
+      });
+      const d = await res.json();
+      if (!res.ok) return toast(d.error || "保存失败");
+      toast("已保存 key，正在加载书单…");
+      document.getElementById("weread-key-input").value = "";
+      openWereadList();
+    });
+
+    async function openWereadList() {
       const list = document.getElementById("weread-list");
       const result = document.getElementById("weread-result");
       result.textContent = "";
       list.innerHTML = '<div class="hint">加载微信读书书单…</div>';
-      document.getElementById("weread-modal").classList.remove("hidden");
       try {
         const res = await fetch(`/api/weread/books?agent=${encodeURIComponent(state.currentAgent)}`);
         const data = await res.json();
@@ -1797,6 +1816,13 @@
       } catch (e) {
         list.innerHTML = `<div class="hint">加载失败: ${esc(e.message)}</div>`;
       }
+    }
+
+    // 打开同步弹窗
+    document.getElementById("btn-weread").addEventListener("click", () => {
+      if (!ensureLogin()) return;
+      document.getElementById("weread-modal").classList.remove("hidden");
+      openWereadList();
     });
 
     // ---------- 滚动进度 ----------

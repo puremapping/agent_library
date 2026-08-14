@@ -15,11 +15,13 @@ const SKILL_VER = "1.0.4";
 const STATE_FILE = path.join(import.meta.dirname, ".weread-state.json");
 
 // ---------- 微信读书网关 ----------
-export async function weread(apiName, params = {}) {
-  if (!WEREAD_KEY) throw new Error("需要 WEREAD_API_KEY 环境变量（wrk- 开头）");
+// key 参数可选：per-user key（服务器按请求者取）；缺省用环境变量 WEREAD_API_KEY（管理员/CLI 用）
+export async function weread(apiName, params = {}, key) {
+  const useKey = key || WEREAD_KEY;
+  if (!useKey) throw new Error("需要微信读书 API key（WEREAD_API_KEY 或用户已配置）");
   const res = await fetch("https://i.weread.qq.com/api/agent/gateway", {
     method: "POST",
-    headers: { Authorization: `Bearer ${WEREAD_KEY}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${useKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({ api_name: apiName, ...params, skill_version: SKILL_VER }),
   });
   const data = await res.json();
@@ -28,12 +30,12 @@ export async function weread(apiName, params = {}) {
 }
 
 // 全量笔记本（游标翻页）
-export async function listNotebooks() {
+export async function listNotebooks(key) {
   const all = [];
   let lastSort;
   let hasMore = 1;
   while (hasMore) {
-    const page = await weread("/user/notebooks", lastSort ? { count: 50, lastSort } : { count: 50 });
+    const page = await weread("/user/notebooks", lastSort ? { count: 50, lastSort } : { count: 50 }, key);
     all.push(...(page.books || []));
     hasMore = page.hasMore;
     lastSort = page.books?.length ? page.books[page.books.length - 1].sort : undefined;
@@ -43,10 +45,10 @@ export async function listNotebooks() {
 }
 
 // 拉一本书的笔记（划线 + 想法）
-export async function fetchNotes(bookId) {
+export async function fetchNotes(bookId, key) {
   const [bm, rv] = await Promise.all([
-    weread("/book/bookmarklist", { bookId }),
-    weread("/review/list/mine", { bookid: bookId, synckey: 0, count: 200 }),
+    weread("/book/bookmarklist", { bookId }, key),
+    weread("/review/list/mine", { bookid: bookId, synckey: 0, count: 200 }, key),
   ]);
   return {
     underlines: (bm.updated || []).map((u) => ({

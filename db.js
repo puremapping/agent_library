@@ -251,6 +251,13 @@ const migrations = [
       `);
     },
   },
+  {
+    version: 3,
+    run: () => {
+      // 每个用户自己的微信读书 key（per-user，避免全局共享导致隐私泄露）
+      ensureColumn("agents", "weread_api_key", "TEXT");
+    },
+  },
 ];
 
 function migrate() {
