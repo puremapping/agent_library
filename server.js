@@ -969,7 +969,7 @@ app.post("/api/weread/sync", requireHumanOrAdmin, upload.single("epub"), async (
     // 锚定测试
     const ar = anchorRate(paragraphs, notes);
     // 同步笔记（锚定失败 → 待归位，归属调用者）
-    let hlOk = 0, noteOk = 0, fallback = 0, skip = 0;
+    let hlOk = 0, noteOk = 0, fallback = 0, skip = 0, bookReviewOk = 0;
     for (const u of notes.underlines) {
       let a = anchorInParagraph(paragraphs, u.markText);
       // strict：锚定必须完美重合（切片原文与 markText 一致），否则降级待归位
@@ -985,15 +985,22 @@ app.post("/api/weread/sync", requireHumanOrAdmin, upload.single("epub"), async (
       if (r.changes) hlOk++; else skip++;
     }
     for (const rv of notes.reviews) {
-      const a = rv.abstract ? anchorInParagraph(paragraphs, rv.abstract) : null;
+      // 区分：无 abstract（整本书评/章节点评）→ 书评；有 abstract（划线想法）→ 批注（锚定失败挂段落0待归位，仍是批注不是书评）
+      if (!rv.abstract) {
+        const rr = db.prepare("INSERT OR IGNORE INTO reviews (book_id, agent_id, title, content, rating, source_id) VALUES (?, ?, ?, ?, ?, ?)")
+          .run(targetAlBookId, ownerAgentId, "", rv.content, rv.star && rv.star > 0 ? rv.star : null, rv.sourceId);
+        if (rr.changes) bookReviewOk++; else skip++;
+        continue;
+      }
+      const a = anchorInParagraph(paragraphs, rv.abstract);
       const r = db.prepare("INSERT OR IGNORE INTO notes (book_id, paragraph, content, agent_id, start_char, end_char, source_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .run(targetAlBookId, a?.paragraph ?? 0, rv.content, ownerAgentId, a?.start_char ?? null, a?.end_char ?? null, rv.sourceId);
-      if (r.changes) noteOk++; else skip++;
+      if (r.changes) { if (a) noteOk++; else fallback++; } else skip++;
     }
 
     res.json(markUntrusted({
       ok: true, alBookId: targetAlBookId, title,
-      anchor: ar, highlights: hlOk, notes: noteOk, fallback, skipped: skip,
+      anchor: ar, highlights: hlOk, notes: noteOk, book_reviews: bookReviewOk, fallback, skipped: skip,
     }));
   } catch (e) {
     res.status(500).json({ error: `同步失败: ${e.message}` });

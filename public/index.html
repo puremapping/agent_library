@@ -366,6 +366,9 @@
       <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-bottom:8px;cursor:pointer;" title="严格模式：划线位置必须与微信读书原文完全重合（含标点），否则进「待归位」由人工归位">
         <input type="checkbox" id="weread-strict" /> 严格模式（完美重合，推荐）
       </label>
+      <div style="margin-bottom:8px;">
+        <input type="text" id="weread-search" placeholder="🔍 搜索书名…" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;outline:none;" />
+      </div>
       <div id="weread-list" style="flex:1;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px;min-height:200px;font-size:13px;">
         <div class="hint">加载中…</div>
       </div>
@@ -401,6 +404,8 @@
       noteSort: "time",
       communityView: "all",
       annotationsMode: localStorage.getItem("al-annotations") || "all",
+      wereadBooks: [],
+      wereadSearch: "",
       sideCollapsed: localStorage.getItem("al-side") === "1",
       previewMode: localStorage.getItem("al-preview") === "1",
       sharedPopup: null,
@@ -1735,10 +1740,38 @@
         const data = await res.json();
         if (!res.ok) { list.innerHTML = `<div class="hint">${esc(data.error || "加载失败")}</div>`; return; }
         if (!data.length) { list.innerHTML = '<div class="hint">微信读书里没有带笔记的书</div>'; return; }
-        list.innerHTML = data.map((b, i) => `
+        state.wereadBooks = data;
+        renderWereadList();
+        // 搜索过滤
+        document.getElementById("weread-search").addEventListener("input", (e) => {
+          state.wereadSearch = e.target.value.trim();
+          renderWereadList();
+        });
+        bindWereadActions();
+      } catch (e) {
+        list.innerHTML = `<div class="hint">加载失败: ${esc(e.message)}</div>`;
+      }
+    }
+
+    // 渲染微信书单（含来源标注 + 搜索过滤）
+    function renderWereadList() {
+      const list = document.getElementById("weread-list");
+      const q = (state.wereadSearch || "").toLowerCase();
+      const filtered = q ? state.wereadBooks.filter((b) => (b.title || "").toLowerCase().includes(q)) : state.wereadBooks;
+      if (!filtered.length) {
+        list.innerHTML = q ? '<div class="hint">没有匹配的书</div>' : '<div class="hint">微信读书里没有带笔记的书</div>';
+        return;
+      }
+      list.innerHTML = filtered.map((b, i) => {
+        const isLocal = String(b.bookId).startsWith("CB_");
+        const srcBadge = isLocal
+          ? '<span style="font-size:11px;color:var(--green, #4a9);border:1px solid var(--green,#4a9);border-radius:4px;padding:0 5px;flex-shrink:0;">📁 本地导入</span>'
+          : '<span style="font-size:11px;color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:0 5px;flex-shrink:0;">📖 书城图书</span>';
+        return `
           <div style="padding:8px 4px;border-bottom:1px solid var(--border);">
             <div style="display:flex;align-items:center;gap:8px;">
               <span style="color:var(--muted);width:22px;flex-shrink:0;">${i + 1}</span>
+              ${srcBadge}
               <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(b.title)}">${esc(b.title)}</span>
               <span style="color:var(--muted);font-size:12px;flex-shrink:0;">划线${b.noteCount}/想法${b.reviewCount}</span>
               <button class="save" style="padding:4px 10px;font-size:12px;" data-sync="${esc(b.bookId)}" data-title="${esc(b.title)}">同步</button>
@@ -1755,9 +1788,16 @@
                 <button class="save" style="padding:3px 10px;font-size:12px;" data-usesrc="${esc(b.bookId)}" data-title="${esc(b.title)}">挂到该书</button>
               </div>
             </div>
-          </div>`).join("");
-        // 同步按钮
-        list.querySelectorAll("[data-sync]").forEach((btn) => {
+          </div>`;
+      }).join("");
+    }
+
+    // 绑定同步/上传/挂载按钮（渲染后调用）
+    function bindWereadActions() {
+      const list = document.getElementById("weread-list");
+      const result = document.getElementById("weread-result");
+      // 同步按钮
+      list.querySelectorAll("[data-sync]").forEach((btn) => {
           btn.addEventListener("click", async () => {
             btn.disabled = true; btn.textContent = "同步中…";
             result.textContent = "";
@@ -1818,9 +1858,6 @@
             } catch (e) { result.textContent = `❌ 同步失败: ${e.message}`; }
           });
         });
-      } catch (e) {
-        list.innerHTML = `<div class="hint">加载失败: ${esc(e.message)}</div>`;
-      }
     }
 
     // 打开同步弹窗

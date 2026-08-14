@@ -258,6 +258,16 @@ const migrations = [
       ensureColumn("agents", "weread_api_key", "TEXT");
     },
   },
+  {
+    version: 4,
+    run: () => {
+      // 微信书评同步去重
+      ensureColumn("reviews", "source_id", "TEXT");
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_source ON reviews (source_id) WHERE source_id IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 function migrate() {
