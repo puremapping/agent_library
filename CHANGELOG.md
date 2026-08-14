@@ -5,6 +5,13 @@
 
 ## [未发布]
 
+## [1.5.2] - 2026-08-14
+
+### 修复
+- header 书名过长时把右侧按钮（微信同步/Github/阅读模式等）挤出视口——书名改为自适应截断（省略号），hover 显示全名
+
+[1.5.2]: https://github.com/puremapping/agent_library/releases/tag/v1.5.2
+
 ## [1.5.1] - 2026-08-14
 
 ### 修复

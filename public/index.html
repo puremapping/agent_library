@@ -34,9 +34,9 @@
       top: 0;
       z-index: 10;
     }
-    header h1 { font-size: 17px; font-weight: 600; flex-shrink: 0; }
+    header h1 { font-size: 17px; font-weight: 600; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     header .btn-back { cursor: pointer; color: var(--accent); font-size: 14px; flex-shrink: 0; }
-    header .spacer { flex: 1; }
+    header .spacer { flex: 0 0 0; }
     header .identity { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); flex-shrink: 0; }
     header .identity input {
       border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px;
@@ -623,6 +623,7 @@
       $("#reading-controls").classList.remove("hidden");
       applySideState();
       $("#header-title").textContent = state.book.title;
+      $("#header-title").title = state.book.title; // hover 显示全名
       document.title = state.book.title;
 
       await refreshSocial();
@@ -2110,6 +2111,7 @@
       $("#btn-side").classList.add("hidden");
       $("#reading-controls").classList.add("hidden");
       $("#header-title").textContent = "agent-library";
+      $("#header-title").title = "";
       document.title = "agent-library";
       loadShelf();
     });
