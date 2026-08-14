@@ -2,9 +2,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import db from "./db.js";
-import { getOrCreateAgent, listAgents, agentExists, renameAgent, loginAgent, isAdmin } from "./agent-utils.js";
+import { getOrCreateAgent, listAgents, agentExists, renameAgent, loginAgent, isAdmin, verifyPassword } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
+import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange } from "./book-utils.js";
 
 export function createMcpServer() {
@@ -370,53 +371,41 @@ server.registerTool("delete_agent", {
   inputSchema: {
     agent_id: z.number().int().describe("要删除的 Agent id（必须是自己的）"),
     agent_name: z.string().describe("操作者身份名"),
+    password: z.string().optional().describe("删自己时若身份设了密码（人类账号），需提供密码验证"),
   },
-}, async ({ agent_id, agent_name }) => {
+}, async ({ agent_id, agent_name, password }) => {
   const agent = db.prepare("SELECT * FROM agents WHERE id = ?").get(agent_id);
   if (!agent) return { content: [{ type: "text", text: JSON.stringify({ error: "Agent 不存在" }) }] };
   const caller = getOrCreateAgent(agent_name);
   if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "需要操作者身份" }) }] };
   if (caller.id !== agent.id && !isAdmin(caller))
     return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的身份（管理员除外）" }) }] };
-    db.prepare("UPDATE books SET created_by = NULL WHERE created_by = ?").run(agent_id);
-    db.exec(`
-    DELETE FROM highlights WHERE agent_id = ${agent_id};
-    DELETE FROM notes WHERE agent_id = ${agent_id};
-    DELETE FROM comments WHERE agent_id = ${agent_id};
-    DELETE FROM thread_messages WHERE agent_id = ${agent_id};
-    DELETE FROM threads WHERE agent_id = ${agent_id};
-    DELETE FROM reviews WHERE agent_id = ${agent_id};
-    DELETE FROM follows WHERE follower_id = ${agent_id} OR followee_id = ${agent_id};
-    DELETE FROM notifications WHERE agent_id = ${agent_id} OR from_agent_id = ${agent_id};
-    DELETE FROM likes WHERE agent_id = ${agent_id};
-  `);
-  db.prepare("DELETE FROM agents WHERE id = ?").run(agent_id);
+  // 凭证保护（#4）：删自己时若自己是人类账号（设密码），需验证密码
+  if (caller.id === agent.id && agent.password) {
+    const ok = verifyPassword(password, agent.password);
+    if (!ok) return { content: [{ type: "text", text: JSON.stringify({ error: "删除身份需要验证密码" }) }] };
+  }
+  purgeAgentContent(agent.id);
   return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: agent_id, name: agent.name }) }] };
 });
 
 server.registerTool("delete_self", {
-  description: "自助撤销：删除当前 Agent 身份并级联清理其全部内容。agent_name 为要删除的身份名。用于 Agent 退出平台。",
+  description: "自助撤销：删除当前 Agent 身份。agent_name 为要删除的身份名；若该身份设了密码（人类账号），需提供 password 验证。删除时他人书上的笔记匿名化保留（不连带抹掉）。",
   inputSchema: {
     agent_name: z.string().describe("要删除的身份名（必须是自己的）"),
+    password: z.string().optional().describe("若身份设了密码（人类账号），需提供密码验证"),
   },
-}, async ({ agent_name }) => {
+}, async ({ agent_name, password }) => {
   const caller = getOrCreateAgent(agent_name);
   if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "需要操作者身份" }) }] };
-  const id = caller.id;
-  db.prepare("UPDATE books SET created_by = NULL WHERE created_by = ?").run(id);
-  db.exec(`
-    DELETE FROM highlights WHERE agent_id = ${id};
-    DELETE FROM notes WHERE agent_id = ${id};
-    DELETE FROM comments WHERE agent_id = ${id};
-    DELETE FROM thread_messages WHERE agent_id = ${id};
-    DELETE FROM threads WHERE agent_id = ${id};
-    DELETE FROM reviews WHERE agent_id = ${id};
-    DELETE FROM follows WHERE follower_id = ${id} OR followee_id = ${id};
-    DELETE FROM notifications WHERE agent_id = ${id} OR from_agent_id = ${id};
-    DELETE FROM likes WHERE agent_id = ${id};
-  `);
-  db.prepare("DELETE FROM agents WHERE id = ?").run(id);
-  return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: id, name: caller.name }) }] };
+  // 凭证保护（#4）
+  const agent = db.prepare("SELECT password FROM agents WHERE id = ?").get(caller.id);
+  if (agent && agent.password) {
+    const ok = verifyPassword(password, agent.password);
+    if (!ok) return { content: [{ type: "text", text: JSON.stringify({ error: "删除身份需要验证密码" }) }] };
+  }
+  purgeAgentContent(caller.id);
+  return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: caller.id, name: caller.name }) }] };
 });
 
 server.registerTool("list_agents", {

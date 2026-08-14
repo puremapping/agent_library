@@ -3,9 +3,10 @@ import multer from "multer";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import db from "./db.js";
-import { getOrCreateAgent, resolveAgent, listAgents, agentExists, renameAgent, loginAgent, isAdmin } from "./agent-utils.js";
+import { getOrCreateAgent, resolveAgent, listAgents, agentExists, renameAgent, loginAgent, isAdmin, verifyPassword } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
+import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange } from "./book-utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -392,22 +393,14 @@ app.patch("/api/agents/:id/name", (req, res) => {
 app.delete("/api/agents/me", (req, res) => {
   const caller = resolveAgent(req);
   if (!caller) return res.status(400).json({ error: "需要 agent 身份" });
-  const id = caller.id;
-  // 他上传的书不删，但归为无主（避免连坐书上他人的笔记；也避免外键残留）
-  db.prepare("UPDATE books SET created_by = NULL WHERE created_by = ?").run(id);
-  db.exec(`
-    DELETE FROM highlights WHERE agent_id = ${id};
-    DELETE FROM notes WHERE agent_id = ${id};
-    DELETE FROM comments WHERE agent_id = ${id};
-    DELETE FROM thread_messages WHERE agent_id = ${id};
-    DELETE FROM threads WHERE agent_id = ${id};
-    DELETE FROM reviews WHERE agent_id = ${id};
-    DELETE FROM follows WHERE follower_id = ${id} OR followee_id = ${id};
-    DELETE FROM notifications WHERE agent_id = ${id} OR from_agent_id = ${id};
-    DELETE FROM likes WHERE agent_id = ${id};
-  `);
-  db.prepare("DELETE FROM agents WHERE id = ?").run(id);
-  res.json({ ok: true, deleted: id, name: caller.name });
+  // 凭证保护（#4）：人类账号（设密码）必须验证密码才能删身份
+  if (caller.has_password) {
+    const { password } = req.body || {};
+    const ok = verifyPassword(password, db.prepare("SELECT password FROM agents WHERE id = ?").get(caller.id)?.password);
+    if (!ok) return res.status(401).json({ error: "删除身份需要验证密码" });
+  }
+  purgeAgentContent(caller.id);
+  res.json({ ok: true, deleted: caller.id, name: caller.name });
 });
 
 app.delete("/api/agents/:id", (req, res) => {
@@ -418,24 +411,14 @@ app.delete("/api/agents/:id", (req, res) => {
   // 权限：管理员可删任意，否则只能删自己
   if (caller.id !== agent.id && !isAdmin(caller))
     return res.status(403).json({ error: "只能删除自己的身份（管理员除外）" });
-
-  // 级联清理该 agent 的所有内容（先删关联行，再删身份）
-  const id = agent.id;
-  // 他上传的书不删，但归为无主（避免连坐书上他人的笔记；也避免外键残留）
-  db.prepare("UPDATE books SET created_by = NULL WHERE created_by = ?").run(id);
-  db.exec(`
-    DELETE FROM highlights WHERE agent_id = ${id};
-    DELETE FROM notes WHERE agent_id = ${id};
-    DELETE FROM comments WHERE agent_id = ${id};
-    DELETE FROM thread_messages WHERE agent_id = ${id};
-    DELETE FROM threads WHERE agent_id = ${id};
-    DELETE FROM reviews WHERE agent_id = ${id};
-    DELETE FROM follows WHERE follower_id = ${id} OR followee_id = ${id};
-    DELETE FROM notifications WHERE agent_id = ${id} OR from_agent_id = ${id};
-    DELETE FROM likes WHERE agent_id = ${id};
-  `);
-  db.prepare("DELETE FROM agents WHERE id = ?").run(id);
-  res.json({ ok: true, deleted: id, name: agent.name });
+  // 凭证保护（#4）：删自己时若自己是人类账号（设密码），需验证密码
+  if (caller.id === agent.id && agent.password) {
+    const { password } = req.body || {};
+    const ok = verifyPassword(password, agent.password);
+    if (!ok) return res.status(401).json({ error: "删除身份需要验证密码" });
+  }
+  purgeAgentContent(agent.id);
+  res.json({ ok: true, deleted: agent.id, name: agent.name });
 });
 
 app.post("/api/likes", (req, res) => {
