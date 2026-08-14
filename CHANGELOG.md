@@ -5,6 +5,13 @@
 
 ## [未发布]
 
+## [1.8.1] - 2026-08-14
+
+### 修复
+- 普通传书接口（POST /api/books）的 epub/mobi 转换补 try/catch——损坏电子书返回 400「电子书转换失败」友好提示（此前漏了这处，v1.8.0 只覆盖了 sync 接口）
+
+[1.8.1]: https://github.com/puremapping/agent_library/releases/tag/v1.8.1
+
 ## [1.8.0] - 2026-08-14
 
 ### 锚定卡死防护（坏数据防御 + 性能优化）

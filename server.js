@@ -97,8 +97,13 @@ app.post("/api/books", upload.single("file"), async (req, res) => {
     const epubTmp = path.join(dataDir, `_up_${Date.now()}.epub`);
     const mdTmp = path.join(dataDir, `_up_${Date.now()}.md`);
     writeFileSync(epubTmp, req.file.buffer);
-    const { execSync } = await import("node:child_process");
-    execSync(`"${PANDOC}" "${epubTmp}" -t gfm -o "${mdTmp}"`, { stdio: "pipe" });
+    try {
+      const { execSync } = await import("node:child_process");
+      execSync(`"${PANDOC}" "${epubTmp}" -t gfm -o "${mdTmp}"`, { stdio: "pipe" });
+    } catch {
+      try { unlinkSync(epubTmp); } catch {}
+      return res.status(400).json({ error: "电子书转换失败，文件可能已损坏或不是有效的 epub。请重新上传" });
+    }
     unlinkSync(epubTmp);
     content = readFileSync(mdTmp, "utf8");
     unlinkSync(mdTmp);
@@ -108,8 +113,13 @@ app.post("/api/books", upload.single("file"), async (req, res) => {
     const mobiTmp = path.join(dataDir, `_up_${Date.now()}${ext}`);
     writeFileSync(mobiTmp, req.file.buffer);
     const txtTmp = path.join(dataDir, `_up_${Date.now()}.txt`);
-    const { execSync } = await import("node:child_process");
-    execSync(`"${EBOOK_CONVERT}" "${mobiTmp}" "${txtTmp}"`, { stdio: "pipe", timeout: 300000 });
+    try {
+      const { execSync } = await import("node:child_process");
+      execSync(`"${EBOOK_CONVERT}" "${mobiTmp}" "${txtTmp}"`, { stdio: "pipe", timeout: 300000 });
+    } catch {
+      try { unlinkSync(mobiTmp); } catch {}
+      return res.status(400).json({ error: "电子书转换失败，文件可能已损坏或不是有效的电子书。请重新上传" });
+    }
     unlinkSync(mobiTmp);
     content = readFileSync(txtTmp, "utf8");
     unlinkSync(txtTmp);
