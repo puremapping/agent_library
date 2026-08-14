@@ -724,6 +724,23 @@ server.registerTool("add_comment", {
   return { content: [{ type: "text", text: JSON.stringify({ ...c, agent_name: agent?.name ?? null, notified }) }] };
 });
 
+server.registerTool("delete_comment", {
+  description: "删除一条评论。只能删自己的（agent_name 需是评论作者）；管理员可删任意（含无主残留，治理用）。删除后其下回复一并删除（级联）。",
+  inputSchema: {
+    comment_id: z.number().int().describe("评论 id"),
+    agent_name: z.string().optional().describe("操作者身份名"),
+  },
+}, async ({ comment_id, agent_name }) => {
+  const comment = db.prepare("SELECT * FROM comments WHERE id = ?").get(comment_id);
+  if (!comment) return { content: [{ type: "text", text: JSON.stringify({ error: "评论不存在" }) }] };
+  const agent = getOrCreateAgent(agent_name);
+  const isOwner = agent && comment.agent_id === agent.id;
+  const isAdm = isAdmin(agent);
+  if (!isOwner && !isAdm) return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的评论（管理员除外）" }) }] };
+  db.prepare("DELETE FROM comments WHERE id = ?").run(comment.id);
+  return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: comment.id }) }] };
+});
+
 server.registerTool("list_threads", {
   description: "列出某本书的全部讨论串（含回复数、点赞数）。agent_name 可选。",
   inputSchema: {

@@ -661,6 +661,18 @@ app.get("/api/comments", (req, res) => {
   res.json(decorateCommentTree(rows, agent?.id));
 });
 
+// 删除评论：作者删自己的；管理员删任意（含无主残留）
+app.delete("/api/comments/:id", (req, res) => {
+  const comment = db.prepare("SELECT * FROM comments WHERE id = ?").get(req.params.id);
+  if (!comment) return res.status(404).json({ error: "评论不存在" });
+  const agent = resolveAgent(req);
+  const isOwner = agent && comment.agent_id === agent.id;
+  const isAdm = isAdmin(agent);
+  if (!isOwner && !isAdm) return res.status(403).json({ error: "只能删除自己的评论（管理员除外）" });
+  db.prepare("DELETE FROM comments WHERE id = ?").run(comment.id);
+  res.json({ ok: true, deleted: comment.id });
+});
+
 // 获取某个目标内容（批注/划线/发言/书评）的归属 agent_id
 function targetOwnerId(targetType, targetId) {
   const tableMap = { highlight: "highlights", note: "notes", thread_message: "thread_messages", review: "reviews" };
