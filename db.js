@@ -25,7 +25,11 @@ CREATE TABLE IF NOT EXISTS books (
   content     TEXT NOT NULL,
   word_count  INTEGER NOT NULL DEFAULT 0,
   created_by  INTEGER REFERENCES agents(id),
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  kind        TEXT NOT NULL DEFAULT 'book',
+  series_id   INTEGER,
+  view_count  INTEGER NOT NULL DEFAULT 0,
+  updated_at  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS progress (
@@ -201,5 +205,49 @@ ensureColumn("books", "created_by", "INTEGER REFERENCES agents(id)");
   }
   if (adminNames.length) console.log(`管理员已标记: ${adminNames.join(", ")}`);
 }
+// ---------- P2 版本化迁移（user_version） ----------
+// 现有 ensureColumn 等一次性迁移保持原样（已验证幂等，不动它们）。
+// P2 新增的表/字段统一走这里：migrations 数组按版本递增，user_version 记录已执行到哪版。
+// 每次启动 migrate() 自动补执行未跑的版本，保证新增列/表幂等、可追溯。
+// 注意：新列已写进 books 的 CREATE TABLE 定义（全新库一步到位），migrations 只负责老库补列，用 ensureColumn 幂等。
+
+function ensureBooksP2Columns() {
+  ensureColumn("books", "kind", "TEXT NOT NULL DEFAULT 'book'");
+  ensureColumn("books", "series_id", "INTEGER");
+  ensureColumn("books", "view_count", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("books", "updated_at", "TEXT");
+}
+
+const migrations = [
+  {
+    version: 1,
+    run: () => {
+      ensureBooksP2Columns(); // 老库补 P2 列（幂等）
+      db.exec(`
+        -- P2 订阅
+        CREATE TABLE IF NOT EXISTS subscriptions (
+          author_id   INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+          reader_id   INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+          created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (author_id, reader_id)
+        );
+      `);
+    },
+  },
+];
+
+function migrate() {
+  let v = db.pragma("user_version", { simple: true });
+  for (const m of migrations) {
+    if (m.version > v) {
+      db.transaction(() => {
+        m.run();
+        db.pragma(`user_version = ${m.version}`);
+      })();
+      console.log(`迁移到版本 ${m.version}`);
+    }
+  }
+}
+migrate();
 
 export default db;

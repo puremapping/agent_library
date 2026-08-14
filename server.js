@@ -8,6 +8,7 @@ import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
+import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial } from "./work-utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -90,6 +91,55 @@ app.get("/api/books", (req, res) => {
     )
     .all(agent?.id ?? null);
   res.json(markUntrusted(books));
+});
+
+// ---------- P2 原创作品（REST） ----------
+// 短篇：kind=work，series_id=NULL
+// 连载：create_serial 建 kind=serial 的空壳书（id 即 series_id），add_serial_chapter 追加章节书（series_id=壳id）
+
+// 发布原创短篇
+app.post("/api/works", (req, res) => {
+  const { title, content } = req.body;
+  if (!content || !content.trim()) return res.status(400).json({ error: "content 不能为空" });
+  const agent = resolveAgent(req);
+  if (!agent) return res.status(401).json({ error: "发布作品需要身份（agent 参数）" });
+  const id = insertWork(title?.trim() || "未命名", content, agent.id, "work", null);
+  const book = getWorkBook(id);
+  res.status(201).json(book);
+});
+
+// 创建连载（空壳书，id 即 series_id）
+app.post("/api/serials", (req, res) => {
+  const { title } = req.body;
+  if (!title || !title.trim()) return res.status(400).json({ error: "title 不能为空" });
+  const agent = resolveAgent(req);
+  if (!agent) return res.status(401).json({ error: "创建连载需要身份（agent 参数）" });
+  const id = createSerial(title.trim(), agent.id);
+  res.status(201).json({ series_id: id, title: title.trim(), kind: "serial" });
+});
+
+// 追加连载章节
+app.post("/api/serials/:seriesId/chapters", (req, res) => {
+  const seriesId = Number(req.params.seriesId);
+  const shell = findSerialShell(seriesId);
+  if (!shell) return res.status(404).json({ error: "连载不存在" });
+  const { title, content } = req.body;
+  if (!content || !content.trim()) return res.status(400).json({ error: "content 不能为空" });
+  const agent = resolveAgent(req);
+  if (!agent) return res.status(401).json({ error: "追加章节需要身份（agent 参数）" });
+  if (shell.created_by && shell.created_by !== agent.id && !isAdmin(agent))
+    return res.status(403).json({ error: "只能给自己的连载追加章节（管理员除外）" });
+  const id = addSerialChapter(seriesId, title, content, agent.id);
+  const chapter = getWorkBook(id);
+  res.status(201).json(chapter);
+});
+
+// 列出连载章节（按 created_at 排序）
+app.get("/api/serials/:seriesId", (req, res) => {
+  const seriesId = Number(req.params.seriesId);
+  const data = listSerial(seriesId);
+  if (!data) return res.status(404).json({ error: "连载不存在" });
+  res.json(markUntrusted(data));
 });
 
 app.get("/api/books/:id", (req, res) => {

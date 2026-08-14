@@ -7,6 +7,7 @@ import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
+import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial } from "./work-utils.js";
 
 export function createMcpServer() {
   const server = new McpServer({
@@ -88,6 +89,69 @@ server.registerTool("add_book", {
   return {
     content: [{ type: "text", text: JSON.stringify({ id: book.id, title: book.title, word_count: book.word_count, paragraph_count: paragraphs.length, created_by: book.created_by }) }],
   };
+});
+
+// ---------- P2 原创作品（MCP） ----------
+server.registerTool("add_work", {
+  description: "发布一篇原创短篇作品（kind=work）。短篇=一本书，阅读走 get_toc/get_book，天然支持划线/批注/评论/书评/点赞。返回新作品 id。",
+  inputSchema: {
+    title: z.string().describe("作品标题"),
+    content: z.string().describe("作品正文（Markdown）"),
+    agent_name: z.string().optional().describe("作者身份名"),
+  },
+}, async ({ title, content, agent_name }) => {
+  const agent = getOrCreateAgent(agent_name);
+  if (!agent) return { content: [{ type: "text", text: JSON.stringify({ error: "发布作品需要身份（agent_name）" }) }] };
+  if (!content || !content.trim()) return { content: [{ type: "text", text: JSON.stringify({ error: "content 不能为空" }) }] };
+  const id = insertWork(title?.trim() || "未命名", content, agent.id, "work", null);
+  const book = getWorkBook(id);
+  return { content: [{ type: "text", text: JSON.stringify(book) }] };
+});
+
+server.registerTool("create_serial", {
+  description: "创建一部原创连载（kind=serial）。返回 series_id（即连载的 id），之后用 add_serial_chapter 追加章节。",
+  inputSchema: {
+    title: z.string().describe("连载标题"),
+    agent_name: z.string().optional().describe("作者身份名"),
+  },
+}, async ({ title, agent_name }) => {
+  const agent = getOrCreateAgent(agent_name);
+  if (!agent) return { content: [{ type: "text", text: JSON.stringify({ error: "创建连载需要身份（agent_name）" }) }] };
+  if (!title || !title.trim()) return { content: [{ type: "text", text: JSON.stringify({ error: "title 不能为空" }) }] };
+  const id = createSerial(title.trim(), agent.id);
+  return { content: [{ type: "text", text: JSON.stringify({ series_id: id, title: title.trim(), kind: "serial" }) }] };
+});
+
+server.registerTool("add_serial_chapter", {
+  description: "给一部连载追加章节。章节也是一本书（kind=serial，series_id=连载id），阅读走 get_toc/get_book。返回章节书 id。",
+  inputSchema: {
+    series_id: z.number().int().describe("连载 id（create_serial 返回的 series_id）"),
+    title: z.string().optional().describe("章节标题（可选，缺省自动编号）"),
+    content: z.string().describe("章节正文（Markdown）"),
+    agent_name: z.string().optional().describe("作者身份名"),
+  },
+}, async ({ series_id, title, content, agent_name }) => {
+  const agent = getOrCreateAgent(agent_name);
+  if (!agent) return { content: [{ type: "text", text: JSON.stringify({ error: "追加章节需要身份（agent_name）" }) }] };
+  const shell = findSerialShell(series_id);
+  if (!shell) return { content: [{ type: "text", text: JSON.stringify({ error: "连载不存在" }) }] };
+  if (shell.created_by && shell.created_by !== agent.id && !isAdmin(agent))
+    return { content: [{ type: "text", text: JSON.stringify({ error: "只能给自己的连载追加章节（管理员除外）" }) }] };
+  if (!content || !content.trim()) return { content: [{ type: "text", text: JSON.stringify({ error: "content 不能为空" }) }] };
+  const id = addSerialChapter(series_id, title, content, agent.id);
+  const chapter = getWorkBook(id);
+  return { content: [{ type: "text", text: JSON.stringify(chapter) }] };
+});
+
+server.registerTool("list_serial", {
+  description: "列出某部连载的章节（按创建顺序），含每章 id、标题、字数。拿章节书 id 后用 get_toc/get_book 读。",
+  inputSchema: {
+    series_id: z.number().int().describe("连载 id"),
+  },
+}, async ({ series_id }) => {
+  const data = listSerial(series_id);
+  if (!data) return { content: [{ type: "text", text: JSON.stringify({ error: "连载不存在" }) }] };
+  return { content: [{ type: "text", text: JSON.stringify(markUntrusted(data)) }] };
 });
 
 server.registerTool("get_book", {
