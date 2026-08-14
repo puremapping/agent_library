@@ -138,6 +138,13 @@
     }
     .mode-btn:hover { border-color: var(--accent); color: var(--accent); }
     .mode-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .para-badge {
+      display: inline-block; width: 6px; height: 12px; border-radius: 2px;
+      margin-right: 6px; vertical-align: middle;
+    }
+    .para-badge.mine { background: var(--accent); }
+    .para-badge.shared { background: var(--muted); }
+    .para-badge.note { background: #e05b5b; }
 
     .side-panel { display: flex; flex-direction: column; min-height: 70vh; overflow: hidden; }
     .side-panel #panel-content { overflow-y: auto; flex: 1; min-height: 0; }
@@ -364,6 +371,7 @@
       communityView: "all",
       annotationsMode: localStorage.getItem("al-annotations") || "all",
       sideCollapsed: localStorage.getItem("al-side") === "1",
+      previewMode: localStorage.getItem("al-preview") === "1",
       sharedPopup: null,
       inbox: null,
       commentCollapse: {},
@@ -638,6 +646,30 @@
       const html = state.paragraphs.map((para, idx) => {
         const cls = state.notes.some((n) => n.paragraph === idx) ? " has-note" : "";
         const layer = marks.get(idx) || { mine: [], shared: [] };
+
+        // 预览模式：渲染 Markdown 排版，不做字符级划线（markdown 转 HTML 后字符偏移错乱）
+        if (state.previewMode) {
+          const hasMine = layer.mine.length > 0;
+          const hasShared = layer.shared.length > 0;
+          const hasNote = state.notes.some((n) => n.paragraph === idx);
+          // 用段落级标记替代字符级：我的→左彩条，共享→灰边，批注→红点
+          const badge = (hasMine ? `<span class="para-badge mine" title="我的划线"></span>` : "")
+            + (hasShared ? `<span class="para-badge shared" title="多人划线"></span>` : "")
+            + (hasNote ? `<span class="para-badge note" title="有批注"></span>` : "");
+          // 用 parseInline 只渲染行内（加粗/斜体/链接/代码），不产生块级 <p>/<h> 破坏 data-para
+          // 标题行（#开头）单独识别成标题样式
+          const heading = para.match(/^(#{1,6})\s+(.*)$/);
+          let bodyHtml;
+          if (heading) {
+            const level = heading[1].length;
+            const size = level === 1 ? "1.6em" : level === 2 ? "1.35em" : "1.15em";
+            bodyHtml = `<span class="md-heading" style="display:block;font-weight:700;font-size:${size};margin:.5em 0;">${marked.parseInline(heading[2])}</span>`;
+          } else {
+            bodyHtml = marked.parseInline(para);
+          }
+          return `<p data-para="${idx}" class="${cls}">${badge}${bodyHtml}</p>`;
+        }
+
         let body = esc(para);
 
         // 三层渲染：我的划线(彩色实线) → 我的批注(红色虚线) → 多人划线(灰色虚线，最上层优先点击)
@@ -687,10 +719,26 @@
           <button class="mode-btn ${state.annotationsMode==='all'?'active':''}" data-mode="all" title="联机：看所有人批注">联机</button>
           <button class="mode-btn ${state.annotationsMode==='mine'?'active':''}" data-mode="mine" title="私人：只看自己的批注">只看我</button>
           <button class="mode-btn ${state.annotationsMode==='none'?'active':''}" data-mode="none" title="单机：纯净初读，不看任何批注">单机</button>
+          <span style="margin-left:12px;">视图</span>
+          <button class="mode-btn view-btn ${!state.previewMode?'active':''}" data-view="source" title="源码：原文精确，可划线批注">源码</button>
+          <button class="mode-btn view-btn ${state.previewMode?'active':''}" data-view="preview" title="预览：渲染 Markdown 排版（划线定位在源码模式）">预览</button>
         </div>`;
       area.innerHTML = modeBar + `<h1>${esc(state.book.title)}</h1>` + html;
       bindMarkClicks();
       bindModeBar();
+      bindViewBar();
+    }
+
+    function bindViewBar() {
+      document.querySelectorAll(".view-btn").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          state.previewMode = btn.dataset.view === "preview";
+          localStorage.setItem("al-preview", state.previewMode ? "1" : "0");
+          document.querySelectorAll(".view-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === (state.previewMode ? "preview" : "source")));
+          await reloadBook();
+          toast(state.previewMode ? "预览视图：Markdown 已渲染" : "源码视图：精确划线/批注");
+        });
+      });
     }
 
     function applySideState() {
