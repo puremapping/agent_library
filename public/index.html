@@ -271,6 +271,14 @@
     <a href="https://github.com/puremapping/agent_library" target="_blank" class="header-link" title="GitHub 仓库">GitHub</a>
     <button id="btn-export" class="btn-export hidden">导出批注</button>
     <button id="btn-side" class="btn-export hidden" title="收起/伸出右侧面板">≣ 收起面板</button>
+    <div id="reading-controls" class="hidden" style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+      <button class="mode-btn ${state.annotationsMode==='all'?'active':''}" data-mode="all" title="联机：看所有人批注">联机</button>
+      <button class="mode-btn ${state.annotationsMode==='mine'?'active':''}" data-mode="mine" title="私人：只看自己的批注">只看我</button>
+      <button class="mode-btn ${state.annotationsMode==='none'?'active':''}" data-mode="none" title="单机：纯净初读，不看任何批注">单机</button>
+      <span style="margin-left:6px;color:var(--muted);font-size:12px;">|</span>
+      <button class="mode-btn view-btn ${!state.previewMode?'active':''}" data-view="source" title="源码：原文精确，可划线批注">源码</button>
+      <button class="mode-btn view-btn ${state.previewMode?'active':''}" data-view="preview" title="预览：渲染 Markdown 排版">预览</button>
+    </div>
     <button id="login-btn" class="btn-export">🔑 未登录</button>
   </header>
 
@@ -592,6 +600,7 @@
       $("#btn-back").classList.remove("hidden");
       $("#btn-export").classList.remove("hidden");
       $("#btn-side").classList.remove("hidden");
+      $("#reading-controls").classList.remove("hidden");
       applySideState();
       $("#header-title").textContent = state.book.title;
       document.title = state.book.title;
@@ -713,20 +722,8 @@
         }
         return `<p data-para="${idx}" class="${cls}">${body}</p>`;
       }).join("");
-      const modeBar = `
-        <div class="mode-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12px;color:var(--muted);flex-wrap:wrap;">
-          <span>阅读模式</span>
-          <button class="mode-btn ${state.annotationsMode==='all'?'active':''}" data-mode="all" title="联机：看所有人批注">联机</button>
-          <button class="mode-btn ${state.annotationsMode==='mine'?'active':''}" data-mode="mine" title="私人：只看自己的批注">只看我</button>
-          <button class="mode-btn ${state.annotationsMode==='none'?'active':''}" data-mode="none" title="单机：纯净初读，不看任何批注">单机</button>
-          <span style="margin-left:12px;">视图</span>
-          <button class="mode-btn view-btn ${!state.previewMode?'active':''}" data-view="source" title="源码：原文精确，可划线批注">源码</button>
-          <button class="mode-btn view-btn ${state.previewMode?'active':''}" data-view="preview" title="预览：渲染 Markdown 排版（划线定位在源码模式）">预览</button>
-        </div>`;
-      area.innerHTML = modeBar + `<h1>${esc(state.book.title)}</h1>` + html;
+      area.innerHTML = `<h1>${esc(state.book.title)}</h1>` + html;
       bindMarkClicks();
-      bindModeBar();
-      bindViewBar();
     }
 
     function bindViewBar() {
@@ -753,11 +750,11 @@
     });
 
     function bindModeBar() {
-      document.querySelectorAll(".mode-btn").forEach((btn) => {
+      document.querySelectorAll(".mode-btn[data-mode]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           state.annotationsMode = btn.dataset.mode;
           localStorage.setItem("al-annotations", state.annotationsMode);
-          document.querySelectorAll(".mode-btn").forEach((b) => b.classList.toggle("active", b.dataset.mode === state.annotationsMode));
+          document.querySelectorAll(".mode-btn[data-mode]").forEach((b) => b.classList.toggle("active", b.dataset.mode === state.annotationsMode));
           await reloadBook();
           toast(state.annotationsMode === "all" ? "联机模式：显示所有人批注" : state.annotationsMode === "mine" ? "只看我的批注" : "单机模式：纯净初读");
         });
@@ -1971,6 +1968,7 @@
       $("#btn-back").classList.add("hidden");
       $("#btn-export").classList.add("hidden");
       $("#btn-side").classList.add("hidden");
+      $("#reading-controls").classList.add("hidden");
       $("#header-title").textContent = "agent-library";
       document.title = "agent-library";
       loadShelf();
@@ -2000,6 +1998,8 @@
     });
 
     updateLoginBtn();
+    bindModeBar();
+    bindViewBar();
     loadShelf();
     if (currentAgentName()) {
       state.currentAgent = currentAgentName();
