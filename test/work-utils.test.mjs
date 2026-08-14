@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import db from "../db.js";
-import { insertWork, findSerialShell, createSerial, addSerialChapter, listSerial, getWorkBook, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers } from "../work-utils.js";
+import { insertWork, findSerialShell, createSerial, addSerialChapter, listSerial, getWorkBook, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers, authorDashboard, trackView } from "../work-utils.js";
 
 // work-utils 直接用全局 db。用事务包裹每次测试 + 回滚，避免污染真实数据。
 function withRollback(fn) {
@@ -148,5 +148,60 @@ test("listSubscribers/listSubscriptions: 双向查询", () => {
     const mySubs = listSubscriptions(reader);
     assert.equal(mySubs.length, 1);
     assert.equal(mySubs[0].id, author);
+  });
+});
+
+// ---------- 作者面板 + 阅读量（P2 里程碑 3） ----------
+test("trackView: 首次打开 +1，重复打开去重", () => {
+  withRollback(() => {
+    const author = fakeAgent("面板作者");
+    const reader = fakeAgent("面板读者");
+    const workId = insertWork("面板短篇", "正文", author, "work", null);
+    assert.equal(trackView(workId, reader), true, "首次打开计 1 次");
+    assert.equal(trackView(workId, reader), false, "重复打开不计");
+    const b = getWorkBook(workId);
+    assert.equal(b.view_count, 1);
+  });
+});
+
+test("trackView: 无身份不计", () => {
+  withRollback(() => {
+    const workId = insertWork("匿名面板短篇", "正文", null, "work", null);
+    assert.equal(trackView(workId, null), false);
+    assert.equal(getWorkBook(workId).view_count, 0);
+  });
+});
+
+test("authorDashboard: 短篇+连载聚合 + 订阅数 + 反馈", () => {
+  withRollback(() => {
+    const author = fakeAgent("面板作者2");
+    const reader = fakeAgent("面板读者2");
+    // 短篇 + 连载(2章)
+    const workId = insertWork("面板短篇2", "正文", author, "work", null);
+    const seriesId = createSerial("面板连载2", author);
+    const c1 = addSerialChapter(seriesId, "第1章", "正文1", author);
+    const c2 = addSerialChapter(seriesId, "第2章", "正文2", author);
+    // 读者看两章
+    trackView(c1, reader);
+    trackView(c2, reader);
+    // 读者订阅
+    subscribe(reader, author);
+    // 读者在短篇写书评
+    db.prepare("INSERT INTO reviews (book_id, agent_id, content, rating) VALUES (?, ?, ?, ?)").run(workId, reader, "好看", 5);
+    // 读者评论短篇的批注
+    const noteId = db.prepare("INSERT INTO notes (book_id, agent_id, paragraph, content) VALUES (?, ?, 0, '批注')").run(workId, reader).lastInsertRowid;
+    db.prepare("INSERT INTO comments (book_id, target_type, target_id, agent_id, content) VALUES (?, 'note', ?, ?, '评论批注')").run(workId, noteId, reader);
+
+    const dash = authorDashboard(author);
+    assert.equal(dash.subscription_count, 1);
+    assert.equal(dash.works.length, 2, "短篇+连载各一");
+    const serial = dash.works.find((x) => x.title === "面板连载2");
+    assert.equal(serial.chapter_count, 2);
+    assert.equal(serial.total_views, 2);
+    const work = dash.works.find((x) => x.title === "面板短篇2");
+    assert.equal(work.review_count, 1);
+    assert.equal(work.comment_count, 1);
+    assert.ok(dash.recent_reviews.some((r) => r.content === "好看"), "书评 content 字段有值");
+    assert.ok(dash.recent_comments.some((c) => c.content === "评论批注"));
   });
 });

@@ -15,7 +15,7 @@ export function insertWork(title, content, agentId, kind, seriesId) {
 }
 
 export function getWorkBook(id) {
-  return db.prepare("SELECT id, title, word_count, created_by, kind, series_id, created_at, updated_at FROM books WHERE id = ?").get(id);
+  return db.prepare("SELECT id, title, word_count, created_by, kind, series_id, view_count, created_at, updated_at FROM books WHERE id = ?").get(id);
 }
 
 // 找连载壳书（id 匹配且 kind=serial）
@@ -114,4 +114,87 @@ export function notifySubscribers(seriesId, bookId, chapterTitle, authorAgentId,
     notified++;
   }
   return notified;
+}
+
+// ---------- 作者反馈面板（P2 里程碑 3） ----------
+// 作者看自己全部原创作品：阅读量/字数/评论数/书评数/订阅数 + 最近反馈。
+
+export function authorDashboard(agentId) {
+  const works = db
+    .prepare(
+      `SELECT b.id, b.title, b.kind, b.series_id, b.word_count, b.view_count, b.created_at, b.updated_at,
+              (SELECT COUNT(*) FROM comments c WHERE c.book_id = b.id) AS comment_count,
+              (SELECT COUNT(*) FROM reviews r WHERE r.book_id = b.id) AS review_count
+       FROM books b
+       WHERE b.created_by = ? AND b.kind IN ('work', 'serial')
+       ORDER BY b.created_at DESC`
+    )
+    .all(agentId);
+
+  // 连载按 series_id 归组：只展示壳书（kind=serial 且 series_id 为空即连载本身）
+  // 章节书不单独展示，归入所属连载
+  const chapterIds = works.filter((w) => w.kind === "serial" && w.series_id != null).map((w) => w.id);
+  const serials = works.filter((w) => w.kind === "serial" && w.series_id == null);
+  const serialWorks = [];
+  for (const s of serials) {
+    const chapters = db
+      .prepare(
+        `SELECT COUNT(*) AS c, SUM(word_count) AS words, SUM(view_count) AS views,
+                (SELECT COUNT(*) FROM comments cm WHERE cm.book_id IN (SELECT id FROM books WHERE series_id = ?)) AS comment_count,
+                (SELECT COUNT(*) FROM reviews rv WHERE rv.book_id IN (SELECT id FROM books WHERE series_id = ?)) AS review_count
+         FROM books WHERE series_id = ?`
+      )
+      .get(s.id, s.id, s.id);
+    serialWorks.push({
+      ...s,
+      chapter_count: chapters.c,
+      total_words: chapters.words || 0,
+      total_views: chapters.views || 0,
+      comment_count: chapters.comment_count,
+      review_count: chapters.review_count,
+      chapters,
+    });
+  }
+
+  const subscriptionCount = db.prepare("SELECT COUNT(*) c FROM subscriptions WHERE author_id = ?").get(agentId).c;
+
+  // 最近反馈：该作者所有书上的评论 + 书评，各取最近 5 条
+  const authorBookIds = works.map((w) => w.id).concat(chapterIds);
+  const recentComments = db
+    .prepare(
+      `SELECT c.id, c.book_id, c.content, c.created_at, a.name AS agent_name
+       FROM comments c LEFT JOIN agents a ON a.id = c.agent_id
+       WHERE c.book_id IN (${authorBookIds.map(() => "?").join(",")})
+       ORDER BY c.created_at DESC, c.id DESC LIMIT 5`
+    )
+    .all(...authorBookIds);
+  const recentReviews = db
+    .prepare(
+      `SELECT r.id, r.book_id, r.title, r.content, r.rating, r.created_at, a.name AS agent_name
+       FROM reviews r LEFT JOIN agents a ON a.id = r.agent_id
+       WHERE r.book_id IN (${authorBookIds.map(() => "?").join(",")})
+       ORDER BY r.created_at DESC, r.id DESC LIMIT 5`
+    )
+    .all(...authorBookIds);
+
+  return {
+    author_id: agentId,
+    subscription_count: subscriptionCount,
+    works: works.filter((w) => w.kind !== "serial" || w.series_id == null).map((w) =>
+      w.kind === "serial" ? serialWorks.find((s) => s.id === w.id) : w
+    ),
+    recent_comments: recentComments,
+    recent_reviews: recentReviews,
+  };
+}
+
+// 阅读量去重自增：该书对某 agent 首次打开（无进度记录）时 view_count+1 且建进度。
+// 返回 true 表示本次计为一次"新阅读"。
+export function trackView(bookId, agentId) {
+  if (!agentId) return false;
+  const existing = db.prepare("SELECT 1 FROM progress WHERE book_id = ? AND agent_id = ?").get(bookId, agentId);
+  if (existing) return false;
+  db.prepare("INSERT OR IGNORE INTO progress (book_id, agent_id, paragraph, updated_at) VALUES (?, ?, 0, datetime('now'))").run(bookId, agentId);
+  db.prepare("UPDATE books SET view_count = view_count + 1 WHERE id = ?").run(bookId);
+  return true;
 }

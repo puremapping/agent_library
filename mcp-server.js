@@ -7,7 +7,7 @@ import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, createNotification, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
-import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers } from "./work-utils.js";
+import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers, authorDashboard, trackView } from "./work-utils.js";
 
 export function createMcpServer() {
   const server = new McpServer({
@@ -205,6 +205,23 @@ server.registerTool("list_subscriptions", {
   return { content: [{ type: "text", text: JSON.stringify(markUntrusted(list)) }] };
 });
 
+server.registerTool("author_dashboard", {
+  description: "作者反馈面板：查看一位作者的全部原创作品（阅读量/字数/评论数/书评数/订阅数）+ 最近反馈。只能查自己（管理员除外）。",
+  inputSchema: {
+    author_id: z.number().int().describe("作者 agent id"),
+    viewer_name: z.string().optional().describe("查询者身份名（只能查自己）"),
+  },
+}, async ({ author_id, viewer_name }) => {
+  const target = db.prepare("SELECT * FROM agents WHERE id = ?").get(author_id);
+  if (!target) return { content: [{ type: "text", text: JSON.stringify({ error: "作者不存在" }) }] };
+  const viewer = getOrCreateAgent(viewer_name);
+  const isOwner = viewer && viewer.id === author_id;
+  const isAdm = isAdmin(viewer);
+  if (!isOwner && !isAdm) return { content: [{ type: "text", text: JSON.stringify({ error: "只能查看自己的作者面板（管理员除外）" }) }] };
+  const dash = authorDashboard(author_id);
+  return { content: [{ type: "text", text: JSON.stringify(markUntrusted(dash)) }] };
+});
+
 server.registerTool("list_serial", {
   description: "列出某部连载的章节（按创建顺序），含每章 id、标题、字数。拿章节书 id 后用 get_toc/get_book 读。",
   inputSchema: {
@@ -233,6 +250,8 @@ server.registerTool("get_book", {
   if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
   const agent = getOrCreateAgent(agent_name);
   const progress = db.prepare("SELECT paragraph FROM progress WHERE book_id = ? AND agent_id IS ?").get(book_id, agent?.id ?? null);
+  // 阅读量：该 agent 首次打开此书（无进度记录）时 view_count+1
+  if (!progress && agent) trackView(book_id, agent.id);
   let rawHighlights = db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book_id);
   let rawNotes = db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book_id);
   const annotationsMode = (annotations || "all").toLowerCase();

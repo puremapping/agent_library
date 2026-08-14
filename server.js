@@ -8,7 +8,7 @@ import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, createNotification, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
-import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers } from "./work-utils.js";
+import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers, authorDashboard, trackView } from "./work-utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -187,6 +187,18 @@ app.get("/api/agents/:id/subscriptions", (req, res) => {
   res.json(markUntrusted(list));
 });
 
+// 作者反馈面板（只看自己，管理员可看任意）
+app.get("/api/agents/:id/dashboard", (req, res) => {
+  const caller = resolveAgent(req);
+  const target = db.prepare("SELECT * FROM agents WHERE id = ?").get(req.params.id);
+  if (!target) return res.status(404).json({ error: "作者不存在" });
+  const isOwner = caller && caller.id === target.id;
+  const isAdm = isAdmin(caller);
+  if (!isOwner && !isAdm) return res.status(403).json({ error: "只能查看自己的作者面板（管理员除外）" });
+  const dash = authorDashboard(target.id);
+  res.json(markUntrusted(dash));
+});
+
 app.get("/api/books/:id", (req, res) => {
   const book = db.prepare("SELECT * FROM books WHERE id = ?").get(req.params.id);
   if (!book) return res.status(404).json({ error: "书不存在" });
@@ -198,6 +210,8 @@ app.get("/api/books/:id", (req, res) => {
 
   const agent = resolveAgent(req);
   const progress = db.prepare("SELECT * FROM progress WHERE book_id = ? AND agent_id IS ?").get(book.id, agent?.id ?? null);
+  // 阅读量：该 agent 首次打开此书（无进度记录）时 view_count+1
+  if (!progress && agent) trackView(book.id, agent.id);
   let highlights = db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
   let notes = db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
 
