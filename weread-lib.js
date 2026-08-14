@@ -182,19 +182,32 @@ export function anchorWithIndex(index, markText) {
   // 2. 全文拼接匹配（跨段划线）——防御：总字符超限跳过
   if (total > MAX_PARAS_FOR_FULL) return null;
   const idx = fullStr.indexOf(n);
-  if (idx < 0) return null;
-  const startPara = paraOf[idx];
-  const rawPara = paragraphs[startPara];
-  const exact = exactAnchor(rawPara, n, paraNorms[startPara]);
-  if (exact) return { paragraph: startPara, start_char: exact.start, end_char: exact.end };
-  // 兜底：段内归一化换算
-  let acc = 0;
-  for (let i = 0; i < startPara; i++) acc += paraNorms[i].length;
-  const segStart = idx - acc;
-  const paraLen = paraNorms[startPara].length;
-  const end = Math.min(segStart + n.length, paraLen);
-  if (end <= segStart) return null;
-  return { paragraph: startPara, start_char: segStart, end_char: end };
+  if (idx >= 0) {
+    const startPara = paraOf[idx];
+    const rawPara = paragraphs[startPara];
+    const exact = exactAnchor(rawPara, n, paraNorms[startPara]);
+    if (exact) return { paragraph: startPara, start_char: exact.start, end_char: exact.end };
+    // 兜底：段内归一化换算
+    let acc = 0;
+    for (let i = 0; i < startPara; i++) acc += paraNorms[i].length;
+    const segStart = idx - acc;
+    const paraLen = paraNorms[startPara].length;
+    const end = Math.min(segStart + n.length, paraLen);
+    if (end > segStart) return { paragraph: startPara, start_char: segStart, end_char: end };
+  }
+  // 3. 跨段划线渐进兜底：微信 markText 跨段且段边界有差异时全文匹配失败，
+  //    取 markText 前缀（从长到短）在单段里匹配，锚定到起始段。
+  //    从 60 字符起，每次减 10，试到 20 字符——短片段更可能精确命中单段。
+  for (let len = Math.min(n.length, 60); len >= 20; len -= 10) {
+    const prefix = n.slice(0, len);
+    for (let i = 0; i < paragraphs.length; i++) {
+      const ni = paraNorms[i].indexOf(prefix);
+      if (ni >= 0) {
+        return { paragraph: i, start_char: ni, end_char: Math.min(ni + prefix.length, paraNorms[i].length) };
+      }
+    }
+  }
+  return null;
 }
 
 // 是否完美重合：锚定位置切出的原文与 markText 归一化后一致
