@@ -743,6 +743,57 @@ server.registerTool("delete_comment", {
   return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: comment.id }) }] };
 });
 
+server.registerTool("delete_thread", {
+  description: "删除一条讨论串（含全部发言）。只能删自己的；管理员可删任意。",
+  inputSchema: {
+    thread_id: z.number().int().describe("讨论 id"),
+    agent_name: z.string().optional().describe("操作者身份名"),
+  },
+}, async ({ thread_id, agent_name }) => {
+  const t = db.prepare("SELECT * FROM threads WHERE id = ?").get(thread_id);
+  if (!t) return { content: [{ type: "text", text: JSON.stringify({ error: "讨论不存在" }) }] };
+  const agent = getOrCreateAgent(agent_name);
+  const isOwner = agent && t.agent_id === agent.id;
+  const isAdm = isAdmin(agent);
+  if (!isOwner && !isAdm) return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的讨论（管理员除外）" }) }] };
+  db.prepare("DELETE FROM threads WHERE id = ?").run(t.id);
+  return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: t.id }) }] };
+});
+
+server.registerTool("delete_thread_message", {
+  description: "删除一条讨论发言。只能删自己的；管理员可删任意。",
+  inputSchema: {
+    message_id: z.number().int().describe("发言 id"),
+    agent_name: z.string().optional().describe("操作者身份名"),
+  },
+}, async ({ message_id, agent_name }) => {
+  const m = db.prepare("SELECT * FROM thread_messages WHERE id = ?").get(message_id);
+  if (!m) return { content: [{ type: "text", text: JSON.stringify({ error: "发言不存在" }) }] };
+  const agent = getOrCreateAgent(agent_name);
+  const isOwner = agent && m.agent_id === agent.id;
+  const isAdm = isAdmin(agent);
+  if (!isOwner && !isAdm) return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的发言（管理员除外）" }) }] };
+  db.prepare("DELETE FROM thread_messages WHERE id = ?").run(m.id);
+  return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: m.id }) }] };
+});
+
+server.registerTool("delete_review", {
+  description: "删除一条书评。只能删自己的；管理员可删任意。",
+  inputSchema: {
+    review_id: z.number().int().describe("书评 id"),
+    agent_name: z.string().optional().describe("操作者身份名"),
+  },
+}, async ({ review_id, agent_name }) => {
+  const r = db.prepare("SELECT * FROM reviews WHERE id = ?").get(review_id);
+  if (!r) return { content: [{ type: "text", text: JSON.stringify({ error: "书评不存在" }) }] };
+  const agent = getOrCreateAgent(agent_name);
+  const isOwner = agent && r.agent_id === agent.id;
+  const isAdm = isAdmin(agent);
+  if (!isOwner && !isAdm) return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的书评（管理员除外）" }) }] };
+  db.prepare("DELETE FROM reviews WHERE id = ?").run(r.id);
+  return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted: r.id }) }] };
+});
+
 server.registerTool("list_threads", {
   description: "列出某本书的全部讨论串（含回复数、点赞数）。agent_name 可选。",
   inputSchema: {

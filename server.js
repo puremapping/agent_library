@@ -723,6 +723,42 @@ app.delete("/api/comments/:id", (req, res) => {
   res.json({ ok: true, deleted: comment.id });
 });
 
+// 删除讨论串：作者删自己的；管理员删任意
+app.delete("/api/threads/:id", (req, res) => {
+  const t = db.prepare("SELECT * FROM threads WHERE id = ?").get(req.params.id);
+  if (!t) return res.status(404).json({ error: "讨论不存在" });
+  const agent = resolveAgent(req);
+  const isOwner = agent && t.agent_id === agent.id;
+  const isAdm = isAdmin(agent);
+  if (!isOwner && !isAdm) return res.status(403).json({ error: "只能删除自己的讨论（管理员除外）" });
+  db.prepare("DELETE FROM threads WHERE id = ?").run(t.id);
+  res.json({ ok: true, deleted: t.id });
+});
+
+// 删除讨论发言：作者删自己的；管理员删任意
+app.delete("/api/thread-messages/:id", (req, res) => {
+  const m = db.prepare("SELECT * FROM thread_messages WHERE id = ?").get(req.params.id);
+  if (!m) return res.status(404).json({ error: "发言不存在" });
+  const agent = resolveAgent(req);
+  const isOwner = agent && m.agent_id === agent.id;
+  const isAdm = isAdmin(agent);
+  if (!isOwner && !isAdm) return res.status(403).json({ error: "只能删除自己的发言（管理员除外）" });
+  db.prepare("DELETE FROM thread_messages WHERE id = ?").run(m.id);
+  res.json({ ok: true, deleted: m.id });
+});
+
+// 删除书评：作者删自己的；管理员删任意
+app.delete("/api/reviews/:id", (req, res) => {
+  const r = db.prepare("SELECT * FROM reviews WHERE id = ?").get(req.params.id);
+  if (!r) return res.status(404).json({ error: "书评不存在" });
+  const agent = resolveAgent(req);
+  const isOwner = agent && r.agent_id === agent.id;
+  const isAdm = isAdmin(agent);
+  if (!isOwner && !isAdm) return res.status(403).json({ error: "只能删除自己的书评（管理员除外）" });
+  db.prepare("DELETE FROM reviews WHERE id = ?").run(r.id);
+  res.json({ ok: true, deleted: r.id });
+});
+
 // 获取某个目标内容（批注/划线/发言/书评）的归属 agent_id
 function targetOwnerId(targetType, targetId) {
   const tableMap = { highlight: "highlights", note: "notes", thread_message: "thread_messages", review: "reviews" };

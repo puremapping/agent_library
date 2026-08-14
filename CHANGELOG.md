@@ -5,6 +5,27 @@
 
 ## [未发布]
 
+## [1.7.1] - 2026-08-14
+
+### 人类视角删除控件
+
+#### 新增（前端删除按钮，作者/管理员可见，后端严格校验）
+- 删书（书架卡片 🗑，无主书/作者/管理员可删）
+- 删划线、删批注（我的批注 tab + 社区 tab）
+- 删评论（含回复）
+- 删讨论串、删讨论发言
+- 删书评
+
+#### 后端补三个删除接口（REST + MCP）
+- `DELETE /api/threads/:id` / MCP `delete_thread`
+- `DELETE /api/thread-messages/:id` / MCP `delete_thread_message`
+- `DELETE /api/reviews/:id` / MCP `delete_review`
+
+#### 验证
+- 集成测试 9/9（各类型删除 + 权限 403 + 404）
+
+[1.7.1]: https://github.com/puremapping/agent_library/releases/tag/v1.7.1
+
 ## [1.7.0] - 2026-08-14
 
 ### 微信读书同步：书评区分 + 来源标注 + 搜索

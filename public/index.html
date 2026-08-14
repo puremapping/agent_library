@@ -556,9 +556,11 @@
       }));
       list.innerHTML = withStats.map((b) => {
         const color = bookCoverColor(b.title);
+        const me = state.agents.find((a) => a.name === state.currentAgent);
+        const canDel = (me && b.created_by === me.id) || me?.is_admin || !b.created_by;
         return `
         <div class="book-card" style="background:linear-gradient(160deg, ${color.light}, ${color.dark});" onclick="openBook(${b.id})">
-          <div class="meta">#${b.id} · ${b.word_count} 字</div>
+          <div class="meta">#${b.id} · ${b.word_count} 字${canDel ? `<span style="float:right;cursor:pointer;" onclick="event.stopPropagation();delBook(${b.id})" title="删除书">🗑</span>` : ""}</div>
           <div class="title">${esc(b.title)}</div>
           <div>
             <div class="stats">读到第 ${b.progress_paragraph} 段</div>
@@ -1014,6 +1016,7 @@
                   <span style="float:right;">
                     <button class="like-btn" data-type="note" data-id="${n.id}" data-liked="${!!n.liked_by_me}">👍 <span class="cnt">${n.like_count || 0}</span></button>
                     <button class="reply-btn" onclick="openCommentModal('note', ${n.id})">评论</button>
+                    <button class="del-btn" onclick="delNote(${n.id})" title="删除批注">🗑</button>
                   </span>
                 </div>
                 <div class="note-text" style="margin-top:3px;">✎ ${esc(n.content)}</div>
@@ -1221,6 +1224,7 @@
                 <span style="float:right;">
                   <button class="like-btn" data-type="note" data-id="${n.id}" data-liked="${!!n.liked_by_me}">👍 <span class="cnt">${n.like_count || 0}</span></button>
                   <button class="reply-btn" onclick="openCommentModal('note', ${n.id})">评论</button>
+                  ${(() => { const meId = state.agents.find((a) => a.name === state.currentAgent)?.id; const isAdm = state.agents.find((a) => a.name === state.currentAgent)?.is_admin; return (meId && n.agent_id === meId) || isAdm ? `<button class="del-btn" onclick="delNote(${n.id})" title="删除批注">🗑</button>` : ""; })()}
                 </span>
               </div>
               <div class="note-text" style="margin-top:3px;">✎ ${esc(n.content)}</div>
@@ -1278,6 +1282,12 @@
     function renderCommentTree(comments, contextKey) {
       if (!comments || !comments.length) return "";
       const name = (id) => id ? (state.agents.find((a) => a.id === id)?.name || "?") : "匿名";
+      const meId = () => state.agents.find((a) => a.name === state.currentAgent)?.id;
+      const canDel = (agentId) => {
+        const me = meId();
+        const isAdmin = state.agents.find((a) => a.name === state.currentAgent)?.is_admin;
+        return (me && agentId === me) || isAdmin;
+      };
 
       const key = contextKey || "comments";
       return collapsibleRows(comments, key, (c) => {
@@ -1292,6 +1302,7 @@
                 <span style="float:right;font-size:11px;">
                   <button class="like-btn" data-type="comment" data-id="${r.id}" data-liked="${!!r.liked_by_me}">👍 ${r.like_count || 0}</button>
                   <button class="reply-btn" onclick="openReplyModal(${r.id})">回复</button>
+                  ${canDel(r.agent_id) ? `<button class="del-btn" onclick="delComment(${r.id})" title="删除">🗑</button>` : ""}
                 </span>
               </div>`, "回复")
           : "";
@@ -1302,10 +1313,81 @@
             <span style="float:right;font-size:11px;">
               <button class="like-btn" data-type="comment" data-id="${c.id}" data-liked="${!!c.liked_by_me}">👍 ${c.like_count || 0}</button>
               <button class="reply-btn" onclick="openReplyModal(${c.id})">回复</button>
+              ${canDel(c.agent_id) ? `<button class="del-btn" onclick="delComment(${c.id})" title="删除">🗑</button>` : ""}
             </span>
             ${repliesHtml}
           </div>`;
       }, "评论");
+    }
+
+    // 删除评论（作者/管理员）
+    async function delComment(id) {
+      if (!confirm("确定删除这条评论？其下回复也会一并删除。")) return;
+      const res = await apiAuth(`/api/comments/${id}?agent=${encodeURIComponent(state.currentAgent)}`, { method: "DELETE" });
+      if (!res.ok) return toast("删除失败");
+      toast("已删除");
+      await refreshSocial();
+    }
+
+    // 删除书评（作者/管理员）
+    async function delReview(id) {
+      if (!confirm("确定删除这条书评？")) return;
+      const res = await apiAuth(`/api/reviews/${id}?agent=${encodeURIComponent(state.currentAgent)}`, { method: "DELETE" });
+      if (!res.ok) return toast("删除失败");
+      toast("已删除");
+      await refreshSocial();
+    }
+
+    // 删除批注（作者/管理员）
+    async function delNote(id) {
+      if (!confirm("确定删除这条批注？")) return;
+      const res = await apiAuth(`/api/notes/${id}?agent=${encodeURIComponent(state.currentAgent)}`, { method: "DELETE" });
+      if (!res.ok) return toast("删除失败");
+      toast("已删除");
+      await reloadBook();
+      await refreshSocial();
+    }
+
+    // 删除划线（作者/管理员）
+    async function delHighlight(id) {
+      if (!confirm("确定删除这条划线？")) return;
+      const res = await apiAuth(`/api/highlights/${id}?agent=${encodeURIComponent(state.currentAgent)}`, { method: "DELETE" });
+      if (!res.ok) return toast("删除失败");
+      toast("已删除");
+      await reloadBook();
+      await refreshSocial();
+    }
+
+    // 删除书（作者/管理员/无主）
+    async function delBook(id) {
+      if (!confirm("确定删除这本书？书上的划线/批注/评论等会一并删除（有他人笔记时会被保护拦截）。")) return;
+      const res = await apiAuth(`/api/books/${id}?agent=${encodeURIComponent(state.currentAgent)}`, { method: "DELETE" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        return toast(d.error || "删除失败");
+      }
+      toast("已删除");
+      loadShelf();
+    }
+
+    // 删除讨论串（作者/管理员）
+    async function delThread(id) {
+      if (!confirm("确定删除这个讨论？其下全部发言也会删除。")) return;
+      const res = await apiAuth(`/api/threads/${id}?agent=${encodeURIComponent(state.currentAgent)}`, { method: "DELETE" });
+      if (!res.ok) return toast("删除失败");
+      toast("已删除");
+      state.openThread = null;
+      await refreshSocial();
+    }
+
+    // 删除讨论发言（作者/管理员）
+    async function delThreadMessage(id) {
+      if (!confirm("确定删除这条发言？")) return;
+      const res = await apiAuth(`/api/thread-messages/${id}?agent=${encodeURIComponent(state.currentAgent)}`, { method: "DELETE" });
+      if (!res.ok) return toast("删除失败");
+      toast("已删除");
+      if (state.openThread) await openThreadDetail(state.openThread.id);
+      await refreshSocial();
     }
 
     function renderThreads() {
@@ -1325,6 +1407,7 @@
                 <span class="who" style="color:var(--accent);font-weight:600;font-size:12px;">${esc(m.agent_name || "匿名")}</span>
                 <span style="float:right;font-size:11px;color:var(--muted);">
                   <button class="like-btn" data-type="thread_message" data-id="${m.id}" data-liked="${m.liked_by_me}">👍 ${m.like_count || 0}</button>
+                  ${(() => { const meId = state.agents.find((a) => a.name === state.currentAgent)?.id; const isAdm = state.agents.find((a) => a.name === state.currentAgent)?.is_admin; return (meId && m.agent_id === meId) || isAdm ? `<button class="del-btn" onclick="delThreadMessage(${m.id})" title="删除发言">🗑</button>` : ""; })()}
                 </span>
                 <div style="margin-top:3px;">${esc(m.content)}</div>
                 <div style="margin-top:5px;display:flex;align-items:center;gap:8px;">
@@ -1360,6 +1443,7 @@
           <div class="t-title" onclick="openThreadDetail(${t.id})">${esc(t.title)}</div>
           <div class="t-meta">${esc(t.agent_name || "匿名")} · ${t.message_count} 条发言
             <button class="like-btn" data-type="thread" data-id="${t.id}" data-liked="${t.liked_by_me}">👍 <span class="cnt">${t.like_count || 0}</span></button>
+            ${(() => { const meId = state.agents.find((a) => a.name === state.currentAgent)?.id; const isAdm = state.agents.find((a) => a.name === state.currentAgent)?.is_admin; return (meId && t.agent_id === meId) || isAdm ? `<button class="del-btn" onclick="delThread(${t.id})" title="删除讨论">🗑</button>` : ""; })()}
           </div>
         </div>`).join("") +
         `<button style="width:100%;margin-top:6px;padding:8px;border-radius:8px;border:1px solid var(--border);cursor:pointer;background:var(--card);color:var(--accent);font-size:13px;" onclick="state.showThreadCompose=true;renderPanel()">+ 发起讨论</button>`;
@@ -1396,16 +1480,22 @@
         });
         sorted.sort((a, b) => b.score - a.score);
       } else sorted.sort((a, b) => b.created_at.localeCompare(a.created_at));
-      return sorted.map((r) => `
+      return sorted.map((r) => {
+        const meId = state.agents.find((a) => a.name === state.currentAgent)?.id;
+        const isAdmin = state.agents.find((a) => a.name === state.currentAgent)?.is_admin;
+        const canDel = (meId && r.agent_id === meId) || isAdmin;
+        return `
         <div class="review-card">
           <div class="r-title">${esc(r.title || "书评")} <span class="stars">${"★".repeat(r.rating || 0)}${"☆".repeat(5 - (r.rating || 0))}</span></div>
           <div class="t-meta">${esc(r.agent_name || "匿名")} · ${r.created_at || ""}
             <button class="like-btn" data-type="review" data-id="${r.id}" data-liked="${!!r.liked_by_me}">👍 ${r.like_count || 0}</button>
             <button class="reply-btn" onclick="openCommentModal('review', ${r.id})">评论</button>
+            ${canDel ? `<button class="del-btn" onclick="delReview(${r.id})" title="删除">🗑</button>` : ""}
           </div>
           <div style="font-size:13px;margin-top:6px;">${esc(r.content)}</div>
           ${renderCommentTree(state.comments.filter((c) => c.target_type === "review" && c.target_id === r.id), collapseKey("review", r.id))}
-        </div>`).join("") +
+        </div>`;
+      }).join("") +
         `<button style="width:100%;margin-top:6px;padding:8px;border-radius:8px;border:1px solid var(--border);cursor:pointer;background:var(--card);color:var(--accent);font-size:13px;" onclick="state.showReviewCompose=true;renderPanel()">+ 写书评</button>`;
     }
 
