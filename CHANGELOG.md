@@ -5,6 +5,13 @@
 
 ## [未发布]
 
+## [1.8.2] - 2026-08-14
+
+### 修复
+- 微信同步弹窗点击「同步」无反应：渲染重构后 `bindWereadActions` 直接用 `forEach` 绑监听，`renderWereadList` 重渲染 innerHTML 导致监听丢失（尤其搜索后）。改为**事件委托**（列表容器统一监听 click/change）+ 搜索监听只初始化一次，重渲染不再丢监听
+
+[1.8.2]: https://github.com/puremapping/agent_library/releases/tag/v1.8.2
+
 ## [1.8.1] - 2026-08-14
 
 ### 修复

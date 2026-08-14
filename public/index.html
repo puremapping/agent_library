@@ -1832,12 +1832,6 @@
         if (!data.length) { list.innerHTML = '<div class="hint">微信读书里没有带笔记的书</div>'; return; }
         state.wereadBooks = data;
         renderWereadList();
-        // 搜索过滤
-        document.getElementById("weread-search").addEventListener("input", (e) => {
-          state.wereadSearch = e.target.value.trim();
-          renderWereadList();
-        });
-        bindWereadActions();
       } catch (e) {
         list.innerHTML = `<div class="hint">加载失败: ${esc(e.message)}</div>`;
       }
@@ -1883,77 +1877,90 @@
     }
 
     // 绑定同步/上传/挂载按钮（渲染后调用）
+    // 事件委托：列表容器监听 click/change，重渲染不丢监听
     function bindWereadActions() {
       const list = document.getElementById("weread-list");
       const result = document.getElementById("weread-result");
-      // 同步按钮
-      list.querySelectorAll("[data-sync]").forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            btn.disabled = true; btn.textContent = "同步中…";
-            result.textContent = "";
-            try {
-              const r = await fetch(`/api/weread/sync?agent=${encodeURIComponent(state.currentAgent)}`, {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ bookId: btn.dataset.sync, strict: document.getElementById("weread-strict").checked }),
-              });
-              const d = await r.json();
-              if (r.status === 400 && /未找到/.test(d.error || "")) {
-                // 找不到电子书 → 行内展开上传/输ID面板
-                document.querySelector(`[data-fallback="${btn.dataset.sync}"]`)?.classList.remove("hidden");
-                result.textContent = d.error;
-              } else if (!r.ok) {
-                result.textContent = `❌ ${d.error || "同步失败"}`;
-              } else {
-                const anchorTxt = d.anchor ? `锚定 ${d.anchor.hit}/${d.anchor.total} (${d.anchor.rate}%)` : "";
-                result.textContent = `✅ 《${btn.dataset.title}》同步完成\n${anchorTxt}\n划线 ${d.highlights} / 想法 ${d.notes} / 待归位 ${d.fallback}${d.skipped ? ` / 去重跳过 ${d.skipped}` : ""}`;
-              }
-            } catch (e) { result.textContent = `❌ 同步失败: ${e.message}`; }
-            btn.disabled = false; btn.textContent = "同步";
-          });
-        });
-        // epub 上传同步
-        list.querySelectorAll(".weread-epub").forEach((inp) => {
-          inp.addEventListener("change", async () => {
-            const file = inp.files[0];
-            if (!file) return;
-            const fd = new FormData();
-            fd.append("epub", file);
-            fd.append("bookId", inp.dataset.book);
-            fd.append("agent", state.currentAgent);
-            fd.append("strict", document.getElementById("weread-strict").checked ? "true" : "false");
-            result.textContent = "上传电子书并同步中…";
-            try {
-              const r = await fetch(`/api/weread/sync?agent=${encodeURIComponent(state.currentAgent)}`, { method: "POST", body: fd });
-              const d = await r.json();
-              if (!r.ok) result.textContent = `❌ ${d.error || "同步失败"}`;
-              else result.textContent = `✅ 《${inp.dataset.title}》同步完成\n锚定 ${d.anchor.hit}/${d.anchor.total} (${d.anchor.rate}%)\n划线 ${d.highlights} / 想法 ${d.notes} / 待归位 ${d.fallback}`;
-            } catch (e) { result.textContent = `❌ 同步失败: ${e.message}`; }
-          });
-        });
-        // 输入 AL 书 ID 挂载
-        list.querySelectorAll("[data-usesrc]").forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            const row = btn.closest(".weread-fallback");
-            const alid = row.querySelector(".weread-alid").value.trim();
-            if (!alid) return toast("请输入 AL 书 ID");
-            result.textContent = "";
-            try {
-              const r = await fetch(`/api/weread/sync?agent=${encodeURIComponent(state.currentAgent)}`, {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ bookId: btn.dataset.usesrc, alBookId: alid, strict: document.getElementById("weread-strict").checked }),
-              });
-              const d = await r.json();
-              if (!r.ok) result.textContent = `❌ ${d.error || "同步失败"}`;
-              else result.textContent = `✅ 《${btn.dataset.title}》已挂到 AL 书 #${alid}\n锚定 ${d.anchor.hit}/${d.anchor.total} (${d.anchor.rate}%)\n划线 ${d.highlights} / 想法 ${d.notes}`;
-            } catch (e) { result.textContent = `❌ 同步失败: ${e.message}`; }
-          });
-        });
+      const strictOn = () => document.getElementById("weread-strict").checked;
+
+      // 同步按钮（点击）
+      list.addEventListener("click", async (e) => {
+        const btn = e.target.closest("[data-sync]");
+        if (btn) {
+          btn.disabled = true; btn.textContent = "同步中…";
+          result.textContent = "";
+          try {
+            const r = await fetch(`/api/weread/sync?agent=${encodeURIComponent(state.currentAgent)}`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ bookId: btn.dataset.sync, strict: strictOn() }),
+            });
+            const d = await r.json();
+            if (r.status === 400 && /未找到/.test(d.error || "")) {
+              document.querySelector(`[data-fallback="${btn.dataset.sync}"]`)?.classList.remove("hidden");
+              result.textContent = d.error;
+            } else if (!r.ok) {
+              result.textContent = `❌ ${d.error || "同步失败"}`;
+            } else {
+              const anchorTxt = d.anchor ? `锚定 ${d.anchor.hit}/${d.anchor.total} (${d.anchor.rate}%)` : "";
+              result.textContent = `✅ 《${btn.dataset.title}》同步完成\n${anchorTxt}\n划线 ${d.highlights} / 想法 ${d.notes} / 待归位 ${d.fallback}${d.skipped ? ` / 去重跳过 ${d.skipped}` : ""}`;
+            }
+          } catch (err) { result.textContent = `❌ 同步失败: ${err.message}`; }
+          btn.disabled = false; btn.textContent = "同步";
+        }
+        // 挂载到 AL 书
+        const useBtn = e.target.closest("[data-usesrc]");
+        if (useBtn) {
+          const row = useBtn.closest(".weread-fallback");
+          const alid = row.querySelector(".weread-alid").value.trim();
+          if (!alid) return toast("请输入 AL 书 ID");
+          result.textContent = "";
+          fetch(`/api/weread/sync?agent=${encodeURIComponent(state.currentAgent)}`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ bookId: useBtn.dataset.usesrc, alBookId: alid, strict: strictOn() }),
+          })
+            .then((r) => r.json())
+            .then((d) => {
+              if (!d.ok) result.textContent = `❌ ${d.error || "同步失败"}`;
+              else result.textContent = `✅ 《${useBtn.dataset.title}》已挂到 AL 书 #${alid}\n锚定 ${d.anchor.hit}/${d.anchor.total} (${d.anchor.rate}%)\n划线 ${d.highlights} / 想法 ${d.notes}`;
+            })
+            .catch((err) => { result.textContent = `❌ 同步失败: ${err.message}`; });
+        }
+      });
+
+      // epub 上传（change）
+      list.addEventListener("change", async (e) => {
+        const inp = e.target.closest(".weread-epub");
+        if (!inp) return;
+        const file = inp.files[0];
+        if (!file) return;
+        const fd = new FormData();
+        fd.append("epub", file);
+        fd.append("bookId", inp.dataset.book);
+        fd.append("agent", state.currentAgent);
+        fd.append("strict", strictOn() ? "true" : "false");
+        result.textContent = "上传电子书并同步中…";
+        try {
+          const r = await fetch(`/api/weread/sync?agent=${encodeURIComponent(state.currentAgent)}`, { method: "POST", body: fd });
+          const d = await r.json();
+          if (!r.ok) result.textContent = `❌ ${d.error || "同步失败"}`;
+          else result.textContent = `✅ 《${inp.dataset.title}》同步完成\n锚定 ${d.anchor.hit}/${d.anchor.total} (${d.anchor.rate}%)\n划线 ${d.highlights} / 想法 ${d.notes} / 待归位 ${d.fallback}`;
+        } catch (err) { result.textContent = `❌ 同步失败: ${err.message}`; }
+      });
     }
 
     // 打开同步弹窗
     document.getElementById("btn-weread").addEventListener("click", () => {
       if (!ensureLogin()) return;
       document.getElementById("weread-modal").classList.remove("hidden");
+      // 事件委托 + 搜索监听只初始化一次（重渲染不丢监听）
+      if (!window._wereadBound) {
+        window._wereadBound = true;
+        bindWereadActions();
+        document.getElementById("weread-search").addEventListener("input", (e) => {
+          state.wereadSearch = e.target.value.trim();
+          renderWereadList();
+        });
+      }
       openWereadList();
     });
 
