@@ -72,7 +72,7 @@ app.post("/api/books", upload.single("file"), (req, res) => {
 
   const agent = resolveAgent(req);
   const info = db
-    .prepare("INSERT INTO books (title, content, word_count, created_by) VALUES (?, ?, ?, ?)")
+    .prepare("INSERT INTO books (title, content, word_count, created_by, updated_at) VALUES (?, ?, ?, ?, datetime('now'))")
     .run(title, content, content.replace(/\s/g, "").length, agent?.id ?? null);
 
   res.status(201).json({ id: info.lastInsertRowid, title, word_count: content.replace(/\s/g, "").length, created_by: agent?.id ?? null });

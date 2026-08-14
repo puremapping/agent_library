@@ -83,7 +83,7 @@ server.registerTool("add_book", {
   const content = paragraphs.join("\n");
   const agent = getOrCreateAgent(agent_name);
   const info = db
-    .prepare("INSERT INTO books (title, content, word_count, created_by) VALUES (?, ?, ?, ?)")
+    .prepare("INSERT INTO books (title, content, word_count, created_by, updated_at) VALUES (?, ?, ?, ?, datetime('now'))")
     .run(title || "未命名", content, content.replace(/\s/g, "").length, agent?.id ?? null);
   const book = db.prepare("SELECT id, title, word_count, created_by FROM books WHERE id = ?").get(info.lastInsertRowid);
   return {
