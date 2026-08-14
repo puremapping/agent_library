@@ -13,6 +13,7 @@ if (!KEY) { console.error("需要 WEREAD_API_KEY 环境变量（wrk- 开头）")
 const AL_BASE = process.env.AL_BASE || "http://localhost:3000";
 const AL_AGENT = process.env.AL_AGENT || "human";
 const PANDOC = "D:/fs/70_Software/pandoc/pandoc.exe";
+const EBOOK_CONVERT = "D:/fs/70_Software/calibre/ebook-convert.exe";
 const SKILL_VER = "1.0.4";
 const STATE_FILE = path.join(import.meta.dirname, ".weread-state.json");
 
@@ -76,10 +77,20 @@ async function fetchNotes(bookId) {
   };
 }
 
-// ---------- epub → md ----------
-function epubToMd(epubPath) {
-  const tmp = path.join(path.dirname(epubPath), `_tmp_${Date.now()}.md`);
-  execSync(`"${PANDOC}" "${epubPath}" -t gfm -o "${tmp}"`, { stdio: "pipe" });
+// ---------- 转 md ----------
+// epub/mobi → md：epub 用 pandoc，mobi 用 calibre ebook-convert（先转 txt 再直接用）
+function convertToMd(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".mobi" || ext === ".azw3") {
+    const out = path.join(path.dirname(filePath), `_tmp_${Date.now()}.txt`);
+    execSync(`"${EBOOK_CONVERT}" "${filePath}" "${out}"`, { stdio: "pipe", timeout: 300000 });
+    const txt = fs.readFileSync(out, "utf8");
+    fs.unlinkSync(out);
+    return txt;
+  }
+  // epub / 其他 → pandoc
+  const tmp = path.join(path.dirname(filePath), `_tmp_${Date.now()}.md`);
+  execSync(`"${PANDOC}" "${filePath}" -t gfm -o "${tmp}"`, { stdio: "pipe" });
   const md = fs.readFileSync(tmp, "utf8");
   fs.unlinkSync(tmp);
   return md;
@@ -178,7 +189,8 @@ async function cmdList() {
 
 async function cmdValidate(bookId, epubPath) {
   const notes = await fetchNotes(bookId);
-  const md = epubToMd(epubPath);
+  const md = convertToMd(epubPath);
+
   const { paragraphs } = buildParagraphs(md);
   const samples = [...notes.underlines, ...notes.reviews.map((r) => ({ markText: r.abstract }))]
     .filter((n) => n.markText && n.markText.length > 8);
@@ -196,7 +208,8 @@ async function cmdValidate(bookId, epubPath) {
 async function cmdUpload(bookId, epubPath) {
   // 1. 先 validate
   const notes = await fetchNotes(bookId);
-  const md = epubToMd(epubPath);
+  const md = convertToMd(epubPath);
+
   const { paragraphs } = buildParagraphs(md);
   const samples = [...notes.underlines, ...notes.reviews.map((r) => ({ markText: r.abstract }))]
     .filter((n) => n.markText && n.markText.length > 8);
@@ -274,12 +287,14 @@ try {
     const bookId = process.argv[3];
     let epubPath = process.argv[4];
     if (!epubPath) {
-      // 从微信读书书名找 ebooks 目录下的 epub（模糊：取书名前若干字符）
+      // 从微信读书书名找 ebooks 目录下的书（epub/mobi/azw3，去标点模糊匹配）
       const info = await weread("/book/info", { bookId });
-      const candidates = fs.readdirSync("D:/ws/agent_library/ebooks").filter((f) => f.endsWith(".epub"));
-      const guess = candidates.find((f) => info.title && f.includes(info.title.slice(0, 4)));
+      const candidates = fs.readdirSync("D:/ws/agent_library/ebooks").filter((f) => /\.(epub|mobi|azw3)$/i.test(f));
+      const strip = (s) => String(s).replace(/[\s[\]【】()（）·,，.:：=~"'“”]+/g, "");
+      const titleKey = strip(info.title || "").slice(0, 6);
+      const guess = candidates.find((f) => strip(f).includes(titleKey));
       if (guess) epubPath = "D:/ws/agent_library/ebooks/" + guess;
-      if (!epubPath) { console.error(`未找到 ${info.title} 的本地 epub，请手动指定路径`); process.exit(1); }
+      if (!epubPath) { console.error(`未找到 ${info.title} 的本地电子书，请手动指定路径`); process.exit(1); }
     }
     if (cmd === "validate") await cmdValidate(bookId, epubPath);
     else await cmdUpload(bookId, epubPath);
