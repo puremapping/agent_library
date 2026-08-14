@@ -280,10 +280,133 @@ async function cmdUpload(bookId, epubPath) {
   console.log("完成。可在 AL 里阅读并回复。");
 }
 
+// ---------- 交互式引导模式（M6） ----------
+// 无参数运行：列出有笔记的书 → 选书 → 场景二(自动传书+笔记) 或 场景一(挂已有AL书)
+import { createInterface } from "node:readline";
+const rl = createInterface({ input: process.stdin, output: process.stdout });
+const ask = (q) => new Promise((res) => rl.question(q, res));
+
+async function cmdInteractive() {
+  console.log("=== 微信读书 → Agent-Library 同步（交互式）===\n");
+  // 1. 列出有笔记的书
+  const books = await listNotebooks();
+  const list = books.filter((b) => b.noteCount + b.reviewCount > 0);
+  console.log(`你有笔记的书（${list.length} 本）：`);
+  list.slice(0, 30).forEach((b, i) => {
+    console.log(`  ${i + 1}. ${b.book?.title?.slice(0, 30)}  划线${b.noteCount}/想法${b.reviewCount}`);
+  });
+  if (list.length > 30) console.log(`  ... 还有 ${list.length - 30} 本`);
+  const pick = await ask("\n选择编号（或 q 退出）：");
+  if (pick.toLowerCase() === "q") { rl.close(); return; }
+  const idx = parseInt(pick, 10) - 1;
+  if (isNaN(idx) || idx < 0 || idx >= list.length) { console.log("无效选择"); rl.close(); return; }
+  const book = list[idx];
+  const bookId = book.bookId;
+  console.log(`\n已选: ${book.book?.title} (${bookId})`);
+
+  // 2. 场景选择：挂已有 AL 书 / 新建上传
+  const already = await findAlBookBySource(bookId);
+  const scene = await ask("\n[1] 挂到 AL 已有书  [2] 新建上传（自动传书+笔记）  [q] 退出：");
+  if (scene.toLowerCase() === "q") { rl.close(); return; }
+
+  if (scene === "1") {
+    // 场景一：需要 AL 目标书 id
+    if (already) {
+      console.log(`已找到 AL 中的对应书 id=${already.id}（来源标记一致）`);
+    } else {
+      const targetId = await ask("请输入 AL 中目标书的 id：");
+      const r = await alApi("GET", `/api/books/${targetId}`);
+      if (r.status !== 200) { console.log("目标书不存在"); rl.close(); return; }
+      // 把微信书与 AL 书绑定（source_id 设为微信 bookId）
+      await alApi("PATCH", `/api/books/${targetId}`, { source: "weread", source_id: bookId });
+      console.log(`已绑定: AL 书 ${targetId} ← weread ${bookId}`);
+      await syncNotesToAlBook(bookId, targetId, book.book?.title);
+    }
+  } else {
+    // 场景二：自动找本地电子书 → 传书 + 同步
+    const md = await findLocalBook(bookId, book.book?.title);
+    if (!md) { console.log("未找到本地电子书，无法新建上传"); rl.close(); return; }
+    const info = await weread("/book/info", { bookId });
+    const up = await uploadBook(info.title || book.book?.title, md, bookId);
+    if (up.status !== 201 && !up.data.exists) { console.log("上传书失败", JSON.stringify(up.data)); rl.close(); return; }
+    console.log(`书已就绪: id=${up.data.id}${up.data.exists ? "（复用）" : ""}`);
+    await syncNotesToAlBook(bookId, up.data.id, info.title || book.book?.title);
+  }
+  rl.close();
+}
+
+// 按 source_id 找 AL 中已绑定的书
+async function findAlBookBySource(sourceId) {
+  const r = await alApi("GET", `/api/books`);
+  if (!Array.isArray(r.data)) return null;
+  return r.data.find((b) => b.source === "weread" && b.source_id === sourceId) || null;
+}
+
+// 本地找书：匹配 ebooks 目录（epub/mobi/azw3），找不到返回 null
+async function findLocalBook(bookId, title) {
+  const candidates = fs.readdirSync(EBOOKS_DIR).filter((f) => /\.(epub|mobi|azw3)$/i.test(f));
+  const strip = (s) => String(s).replace(/[\s[\]【】()（）·,，.:：=~"'“”]+/g, "");
+  const key = strip(title || "").slice(0, 6);
+  const guess = candidates.find((f) => strip(f).includes(key));
+  if (!guess) return null;
+  return convertToMd(EBOOKS_DIR + "/" + guess);
+}
+
+// 拉笔记 → 锚定 → 写入 AL 书（复用 cmdUpload 后半段逻辑）
+async function syncNotesToAlBook(bookId, bookIdAl, title) {
+  // 拉 AL 书正文做锚定基准
+  const bookResp = await alApi("GET", `/api/books/${bookIdAl}`);
+  const content = bookResp.data?.content || "";
+  if (!content) { console.log("AL 书无正文，无法锚定"); return; }
+  const paragraphs = content.split(/\r?\n/).filter((p) => p.trim().length > 0).map((p) => p.trim());
+
+  const notes = await fetchNotes(bookId);
+  // 锚定率（全量）
+  const samples = [...notes.underlines, ...notes.reviews.map((r) => ({ markText: r.abstract }))].filter((n) => n.markText && n.markText.length > 8);
+  let hit = 0;
+  for (const s of samples) if (anchorInParagraph(paragraphs, s.markText)) hit++;
+  const total = samples.length;
+  const rate = total ? Math.round((hit / total) * 100) : 0;
+  console.log(`\n锚定测试: ${hit}/${total} (${rate}%) ${rate >= 85 ? "✅ 通过" : "⚠️ 低于 85%"}`);
+
+  // 失败处理三选项
+  if (rate < 85) {
+    const choice = await ask("\n锚定低于 85%，如何处理？\n[1] 进待归位（默认，内容保留）  [2] 只传书不带笔记  [3] 放弃：");
+    if (choice === "2") { console.log("只传书，跳过笔记同步"); return; }
+    if (choice === "3") { console.log("已放弃"); return; }
+  }
+
+  // 同步笔记（锚定失败 → 待归位挂段落0）
+  let hlOk = 0, ntOk = 0, fb = 0, skip = 0;
+  for (const u of notes.underlines) {
+    const a = anchorInParagraph(paragraphs, u.markText);
+    if (!a) {
+      const r = await alApi("POST", `/api/books/${bookIdAl}/notes`, { paragraph: 0, content: `[微信划线·待归位] ${u.markText.slice(0, 150)}`, agent: AL_AGENT, source_id: u.sourceId });
+      if (r.status === 201) fb++;
+      continue;
+    }
+    const r = await alApi("POST", `/api/books/${bookIdAl}/highlights`, { paragraph: a.paragraph, text: u.markText.slice(0, 200), agent: AL_AGENT, start_char: a.start_char, end_char: a.end_char, color: "yellow", source_id: u.sourceId });
+    if (r.status === 201) hlOk++;
+  }
+  for (const rv of notes.reviews) {
+    const a = rv.abstract ? anchorInParagraph(paragraphs, rv.abstract) : null;
+    const body = { paragraph: a?.paragraph ?? 0, content: rv.content, agent: AL_AGENT, source_id: rv.sourceId };
+    if (a) { body.start_char = a.start_char; body.end_char = a.end_char; }
+    const r = await alApi("POST", `/api/books/${bookIdAl}/notes`, body);
+    if (r.status === 201) ntOk++;
+  }
+  // 记录状态
+  const state = readState();
+  const maxT = Math.max(...notes.underlines.map((u) => u.createTime || 0), ...notes.reviews.map((r) => r.createTime || 0));
+  if (maxT > 0) { state[bookId] = { lastSync: maxT, title }; writeState(state); }
+  console.log(`\n同步完成: 划线 ${hlOk} / 想法 ${ntOk} / 待归位 ${fb}`);
+}
+
 // ---------- 入口 ----------
 const cmd = process.argv[2];
 try {
-  if (cmd === "list") await cmdList();
+  if (!cmd) await cmdInteractive();
+  else if (cmd === "list") await cmdList();
   else if (cmd === "validate" || cmd === "upload") {
     // 支持按 bookId 自动匹配 ebooks 目录里的本地 epub（避免命令行中文路径编码问题）
     const bookId = process.argv[3];
