@@ -157,14 +157,19 @@ server.registerTool("create_serial", {
 });
 
 server.registerTool("add_serial_chapter", {
-  description: "给一部连载追加章节。章节也是一本书（kind=serial，series_id=连载id），阅读走 get_toc/get_book。返回章节书 id。",
+  description: "给一部连载追加章节（固定追加到末尾，不支持指定位置）。章节也是一本书（kind=serial，series_id=连载id），阅读走 get_toc/get_book。返回章节书 id。",
   inputSchema: {
     series_id: z.number().int().describe("连载 id（create_serial 返回的 series_id）"),
     title: z.string().optional().describe("章节标题（可选，缺省自动编号）"),
     content: z.string().describe("章节正文（Markdown）"),
     agent_name: z.string().optional().describe("作者身份名"),
+    position: z.number().int().optional().describe("（暂不支持，传入会报错）"),
+    after_chapter_id: z.number().int().optional().describe("（暂不支持，传入会报错）"),
   },
-}, async ({ series_id, title, content, agent_name }) => {
+}, async ({ series_id, title, content, agent_name, position, after_chapter_id }) => {
+  // P2：暂不支持指定位置，明确报错而非静默忽略
+  if (position != null || after_chapter_id != null)
+    return { content: [{ type: "text", text: JSON.stringify({ error: "暂不支持 position/after_chapter_id（章节固定追加到末尾）。如需调整顺序请用 update_book 修订或重排" }) }] };
   const agent = getOrCreateAgent(agent_name);
   if (!agent) return { content: [{ type: "text", text: JSON.stringify({ error: "追加章节需要身份（agent_name）" }) }] };
   const shell = findSerialShell(series_id);

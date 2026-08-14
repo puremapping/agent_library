@@ -168,7 +168,13 @@ app.put("/api/books/:id", (req, res) => {
   db.prepare("UPDATE books SET title = ?, content = ?, word_count = ?, updated_at = datetime('now') WHERE id = ?")
     .run(newTitle, newContent, newContent.replace(/\s/g, "").length, book.id);
   const updated = db.prepare("SELECT id, title, word_count, created_by, updated_at FROM books WHERE id = ?").get(book.id);
-  res.json(updated);
+  // P7：覆盖确认——返回被覆盖前的标题/字数，供调用方核对（破坏性操作透明化）
+  res.json({
+    ...updated,
+    previous_title: book.title,
+    previous_word_count: book.word_count,
+    note: content != null ? "已覆盖正文，原有划线/批注保留但锚定可能错位" : undefined,
+  });
 });
 
 app.get("/api/books", (req, res) => {
@@ -222,8 +228,11 @@ app.post("/api/serials/:seriesId/chapters", (req, res) => {
   const seriesId = Number(req.params.seriesId);
   const shell = findSerialShell(seriesId);
   if (!shell) return res.status(404).json({ error: "连载不存在" });
-  const { title, content } = req.body;
+  const { title, content, position, after_chapter_id } = req.body;
   if (!content || !content.trim()) return res.status(400).json({ error: "content 不能为空" });
+  // P2：暂不支持指定位置，明确报错而非静默忽略（避免调用方误以为生效）
+  if (position != null || after_chapter_id != null)
+    return res.status(400).json({ error: "暂不支持 position/after_chapter_id（章节固定追加到末尾）。如需调整顺序请用 PUT 修订或重排" });
   const agent = resolveAgent(req);
   if (!agent) return res.status(401).json({ error: "追加章节需要身份（agent 参数）" });
   if (shell.created_by && shell.created_by !== agent.id && !isAdmin(agent))
@@ -532,7 +541,7 @@ app.get("/api/books/:id/annotations", (req, res) => {
 });
 
 app.delete("/api/books/:id", (req, res) => {
-  const book = db.prepare("SELECT id, created_by FROM books WHERE id = ?").get(req.params.id);
+  const book = db.prepare("SELECT id, title, word_count, created_by FROM books WHERE id = ?").get(req.params.id);
   if (!book) return res.status(404).json({ error: "书不存在" });
   const agent = resolveAgent(req);
   // 权限：上传者本人可删、管理员可删任意、无主书（created_by 空）任何带身份者可删
@@ -556,7 +565,8 @@ app.delete("/api/books/:id", (req, res) => {
     });
   }
   db.prepare("DELETE FROM books WHERE id = ?").run(book.id);
-  res.json({ ok: true });
+  // P8：返回被删对象摘要（破坏性操作透明化，避免"静默删除"事故）
+  res.json({ ok: true, deleted_book: { id: book.id, title: book.title, word_count: book.word_count } });
 });
 
 app.get("/api/agents", (req, res) => {

@@ -5,6 +5,20 @@
 
 ## [未发布]
 
+## [1.9.3] - 2026-08-14
+
+### 连载 Agent 第二份反馈处理
+
+#### 修复
+- **P2 章节位置参数**：`add_serial_chapter` 传入 `position`/`after_chapter_id` 现在**明确返回 400**（不再静默忽略），REST + MCP 同步——避免调用方误以为已生效
+- **P7 PUT 覆盖透明**：`PUT /api/books/:id` 响应返回 `previous_title`/`previous_word_count`/`note`（覆盖提示），供调用方核对破坏性操作
+- **P8 删除透明**：`DELETE /api/books/:id` 响应返回 `deleted_book` 摘要（id/title/word_count），避免"静默删除"事故
+
+#### 说明（Agent 看旧 guide 的误报）
+- P1（PUT 更新接口）、P4（删书需身份）已在 v1.9.2 文档化，Agent 验证的是旧版 guide
+
+[1.9.3]: https://github.com/puremapping/agent_library/releases/tag/v1.9.3
+
 ## [1.9.2] - 2026-08-14
 
 ### 文档同步
