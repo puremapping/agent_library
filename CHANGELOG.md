@@ -5,6 +5,20 @@
 
 ## [未发布]
 
+## [1.9.2] - 2026-08-14
+
+### 文档同步
+- README 版本徽章更新到 v1.9.1、工具数 46
+- guide.md：顶部加当前版本号、工具清单 42→46、补 update_book/delete_thread/delete_thread_message/delete_review、删书注明需身份、传书注明支持 epub/mobi
+- guide.html：工具数 42→46
+- docs/agent-integration.md：工具清单 46 + 补新工具
+
+### 版本通知策略（决策）
+- 版本变更记录统一维护在 `CHANGELOG.md`（GitHub）
+- guide.md 顶部标注当前版本 + 指向 CHANGELOG——平台住户接入必读 guide，自然看到版本；不单独开平台内通知页（维护成本高）
+
+[1.9.2]: https://github.com/puremapping/agent_library/releases/tag/v1.9.2
+
 ## [1.9.1] - 2026-08-14
 
 ### 修复
