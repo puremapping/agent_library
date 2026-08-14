@@ -96,62 +96,102 @@ export function toParagraphs(content) {
   return String(content || "").split(/\r?\n/).filter((p) => p.trim().length > 0).map((p) => p.trim());
 }
 
+// content 二进制/损坏校验：epub ZIP 头 / NUL 字节 / U+FFFD 高密度
+// 防止坏数据（如 epub 二进制被当文本读）进入锚定导致 O(n²) 卡死
+export function isBrokenContent(content) {
+  const s = String(content || "");
+  if (!s.length) return true;
+  if (s.startsWith("PK\u0003\u0004")) return true; // ZIP 头（epub 二进制）
+  if (s.includes("\u0000")) return true; // NUL 字节
+  const fffd = (s.match(/\uFFFD/g) || []).length;
+  if (fffd > 0 && fffd / s.length > 0.01) return true; // 大量替换符（编码损坏）
+  return false;
+}
+
 // 在原始段落里精确定位 markText，返回 {start, end}（原始字符偏移，完美重合）
 // 优先原始精确匹配；失败则用归一化映射换算回原始位置（处理空白/引号差异）
-function exactAnchor(rawPara, markText) {
+// paraNorm 可选：该段已归一化文本（避免重复 normalize）
+function exactAnchor(rawPara, markText, paraNorm) {
   const raw = String(rawPara ?? "");
   // 1. 原始精确匹配（先试 markText 原文，再试去空白版本）
+  const rawTrimmed = markText.replace(/\s+/g, "");
   let idx = raw.indexOf(markText);
-  if (idx < 0) idx = raw.indexOf(markText.replace(/\s+/g, ""));
-  if (idx >= 0) return { start: idx, end: idx + markText.replace(/\s+/g, "").length };
+  if (idx < 0) idx = raw.indexOf(rawTrimmed);
+  if (idx >= 0) return { start: idx, end: idx + rawTrimmed.length };
 
   // 2. 归一化匹配 + 映射回原始位置
-  //    构建"归一化字符 → 原始偏移"映射（每段）
-  const normChars = [];
-  const rawOffsets = [];
+  const pn = paraNorm ?? normalize(raw);
+  const nMark = normalize(markText);
+  const ni = pn.indexOf(nMark);
+  if (ni < 0) return null;
+  // 归一化位置 → 原始偏移：逐字符跳过被归一化的字符
+  let start = -1, end = -1;
+  let normIdx = 0;
   for (let j = 0; j < raw.length; j++) {
     const c = raw[j];
-    const nc = normalize(c);
-    if (nc) { normChars.push(nc); rawOffsets.push(j); }
+    if (!normalize(c)) continue; // 该字符被归一化掉（空白/引号等）
+    if (normIdx === ni) start = j;
+    if (normIdx === ni + nMark.length - 1) { end = j + 1; break; }
+    normIdx++;
   }
-  const normStr = normChars.join("");
-  const nMark = normalize(markText);
-  const ni = normStr.indexOf(nMark);
-  if (ni < 0) return null;
-  const start = rawOffsets[ni];
-  const endRaw = rawOffsets[ni + nMark.length - 1] + 1;
-  return { start, end: endRaw };
+  if (start < 0 || end <= start) return null;
+  return { start, end };
 }
 
 // 锚定：单段优先，全文拼接兜底（支持跨段）。返回 {paragraph, start_char, end_char}（原始偏移，完美重合）
+// 防御：markText 或段落异常长时跳过（避免极端输入卡死事件循环）
+const MAX_ANCHOR_CHARS = 20000; // 单条 markText 超过此长度视为异常，跳过锚定
+const MAX_PARAS_FOR_FULL = 200000; // 全文拼接索引总字符上限
+
 export function anchorInParagraph(paragraphs, markText) {
-  const n = normalize(markText);
-  if (!n) return null;
-  // 1. 单段精确匹配（优先）
-  for (let i = 0; i < paragraphs.length; i++) {
-    const exact = exactAnchor(paragraphs[i], markText);
-    if (exact) return { paragraph: i, start_char: exact.start, end_char: exact.end };
-  }
-  // 2. 全文拼接匹配（跨段划线）—— 取起始段
+  return anchorWithIndex(buildAnchorIndex(paragraphs), markText);
+}
+
+// 预构建锚定索引（一次，供多条 markText 复用，避免每条重建全文拼接 O(n²)）
+export function buildAnchorIndex(paragraphs) {
+  // 防御：总字符超限时仍可建索引，但全文匹配会受限
+  const paraNorms = paragraphs.map((p) => normalize(p));
   const full = [];
   const paraOf = [];
+  let total = 0;
   for (let i = 0; i < paragraphs.length; i++) {
-    const pn = normalize(paragraphs[i]);
+    const pn = paraNorms[i];
+    total += pn.length;
     for (let j = 0; j < pn.length; j++) { full.push(pn[j]); paraOf.push(i); }
   }
-  const fullStr = full.join("");
+  return { paragraphs, paraNorms, fullStr: full.join(""), paraOf, total };
+}
+
+// 用预建索引锚定一条 markText
+export function anchorWithIndex(index, markText) {
+  const rawMark = String(markText || "");
+  if (rawMark.length > MAX_ANCHOR_CHARS) return null; // 超长划线跳过（异常输入防御）
+  const n = normalize(rawMark);
+  if (!n) return null;
+  const { paragraphs, paraNorms, fullStr, paraOf, total } = index;
+  // 1. 单段精确匹配（优先）——用预归一化段，避免重复 normalize
+  for (let i = 0; i < paragraphs.length; i++) {
+    const ni = paraNorms[i].indexOf(n);
+    if (ni >= 0) {
+      // 换算回原始偏移（归一化映射）
+      const exact = exactAnchor(paragraphs[i], rawMark, paraNorms[i]);
+      if (exact) return { paragraph: i, start_char: exact.start, end_char: exact.end };
+      return { paragraph: i, start_char: ni, end_char: ni + n.length };
+    }
+  }
+  // 2. 全文拼接匹配（跨段划线）——防御：总字符超限跳过
+  if (total > MAX_PARAS_FOR_FULL) return null;
   const idx = fullStr.indexOf(n);
   if (idx < 0) return null;
   const startPara = paraOf[idx];
-  // 用起始段的原始文本精确定位
   const rawPara = paragraphs[startPara];
-  const exact = exactAnchor(rawPara, n);
+  const exact = exactAnchor(rawPara, n, paraNorms[startPara]);
   if (exact) return { paragraph: startPara, start_char: exact.start, end_char: exact.end };
   // 兜底：段内归一化换算
   let acc = 0;
-  for (let i = 0; i < startPara; i++) acc += normalize(paragraphs[i]).length;
+  for (let i = 0; i < startPara; i++) acc += paraNorms[i].length;
   const segStart = idx - acc;
-  const paraLen = normalize(rawPara).length;
+  const paraLen = paraNorms[startPara].length;
   const end = Math.min(segStart + n.length, paraLen);
   if (end <= segStart) return null;
   return { paragraph: startPara, start_char: segStart, end_char: end };
@@ -167,10 +207,15 @@ export function isPerfectAnchor(paragraphs, anchor, markText) {
 
 // 锚定率（全量，用于门槛判断）
 export function anchorRate(paragraphs, notes) {
+  return anchorRateWithIndex(buildAnchorIndex(paragraphs), notes);
+}
+
+// 基于预建索引的锚定率（性能版，供批量场景复用索引）
+export function anchorRateWithIndex(index, notes) {
   const samples = [...notes.underlines, ...notes.reviews.map((r) => ({ markText: r.abstract }))]
     .filter((n) => n.markText && n.markText.length > 8);
   let hit = 0;
-  for (const s of samples) if (anchorInParagraph(paragraphs, s.markText)) hit++;
+  for (const s of samples) if (anchorWithIndex(index, s.markText)) hit++;
   const total = samples.length;
   return { hit, total, rate: total ? Math.round((hit / total) * 100) : 0 };
 }

@@ -10,7 +10,7 @@ import { notifyForContent, createNotification, getInbox, markRead, markAllRead, 
 import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
 import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers, authorDashboard, trackView } from "./work-utils.js";
-import { WEREAD_KEY, PANDOC, EBOOK_CONVERT, weread, listNotebooks, fetchNotes, toParagraphs, anchorInParagraph, anchorRate, findLocalBook, isPerfectAnchor } from "./weread-lib.js";
+import { WEREAD_KEY, PANDOC, EBOOK_CONVERT, weread, listNotebooks, fetchNotes, toParagraphs, anchorInParagraph, anchorRate, anchorRateWithIndex, buildAnchorIndex, anchorWithIndex, findLocalBook, isPerfectAnchor, isBrokenContent } from "./weread-lib.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -119,6 +119,11 @@ app.post("/api/books", upload.single("file"), async (req, res) => {
 
   const paragraphs = splitParagraphs(content);
   content = paragraphs.join("\n");
+
+  // 防卡：拒绝二进制/损坏内容入库（epub 转失败会产生 PK 头/NUL/U+FFFD 高密度）
+  if (isBrokenContent(content)) {
+    return res.status(400).json({ error: "文件内容异常（可能不是有效的 Markdown/电子书），已拒绝上传。请确认文件未损坏" });
+  }
 
   const agent = resolveAgent(req);
   const info = db
@@ -947,6 +952,27 @@ app.post("/api/weread/key", requireHumanOrAdmin, async (req, res) => {
 // 同步一本书的笔记
 // body: { bookId, alBookId?, epub? } — alBookId=场景一(挂已有书)；否则场景二(自动传书+笔记)；epub=上传的 epub 文件（multipart）
 app.post("/api/weread/sync", requireHumanOrAdmin, upload.single("epub"), async (req, res) => {
+  // 防卡兜底：120s 未完成则 504（锚定已加防御，此兜底应对极端未知情况）
+  let done = false;
+  const timeout = setTimeout(() => {
+    if (!done) {
+      console.error("[weread-sync] 同步超时（120s），已终止响应");
+      try { res.status(504).json({ error: "同步超时，请重试（可能是书籍数据异常）" }); } catch {}
+    }
+  }, 120000);
+  try {
+    await doWereadSync(req, res);
+  } catch (e) {
+    console.error("[weread-sync] 错误:", e.message);
+    try { res.status(500).json({ error: `同步失败: ${e.message}` }); } catch {}
+  } finally {
+    done = true;
+    clearTimeout(timeout);
+  }
+});
+
+// 微信同步核心逻辑（独立函数，路由用超时包裹）
+async function doWereadSync(req, res) {
   const bookId = req.body.bookId;
   const alBookId = req.body.alBookId ? Number(req.body.alBookId) : undefined;
   const strict = req.body.strict === true || req.body.strict === "true"; // 人类可选：严格模式要求完美重合
@@ -978,8 +1004,13 @@ app.post("/api/weread/sync", requireHumanOrAdmin, upload.single("epub"), async (
         const epubTmp = path.join(dataDir, `_weread_up_${Date.now()}.epub`);
         const mdTmp = path.join(dataDir, `_weread_up_${Date.now()}.md`);
         writeFileSync(epubTmp, req.file.buffer);
-        const { execSync } = await import("node:child_process");
-        execSync(`"${PANDOC}" "${epubTmp}" -t gfm -o "${mdTmp}"`, { stdio: "pipe" });
+        try {
+          const { execSync } = await import("node:child_process");
+          execSync(`"${PANDOC}" "${epubTmp}" -t gfm -o "${mdTmp}"`, { stdio: "pipe" });
+        } catch (convErr) {
+          try { unlinkSync(epubTmp); } catch {}
+          return res.status(400).json({ error: "电子书转换失败，文件可能已损坏或不是有效的 epub。请重新上传" });
+        }
         unlinkSync(epubTmp);
         md = readFileSync(mdTmp, "utf8");
         unlinkSync(mdTmp);
@@ -1002,14 +1033,23 @@ app.post("/api/weread/sync", requireHumanOrAdmin, upload.single("epub"), async (
       paragraphs = toParagraphs(md);
     }
 
-    // 锚定测试
-    const ar = anchorRate(paragraphs, notes);
+    // 防卡：校验 content 非损坏数据（二进制/编码坏），否则拒绝同步
+    const contentText = paragraphs.join("\n");
+    if (isBrokenContent(contentText)) {
+      return res.status(400).json({ error: "该书的正文数据异常（可能是损坏的电子书/二进制内容），已拒绝同步。请重新上传正确的 epub" });
+    }
+
+    // 预建锚定索引（一次，全量复用，避免每条 markText 重建全文拼接 O(n²)）
+    const anchorIndex = buildAnchorIndex(paragraphs);
+
+    // 锚定测试（用索引）
+    const ar = anchorRateWithIndex(anchorIndex, notes);
     // 同步笔记（锚定失败 → 待归位，归属调用者）
     let hlOk = 0, noteOk = 0, fallback = 0, skip = 0, bookReviewOk = 0;
     for (const u of notes.underlines) {
-      let a = anchorInParagraph(paragraphs, u.markText);
+      let a = anchorWithIndex(anchorIndex, u.markText);
       // strict：锚定必须完美重合（切片原文与 markText 一致），否则降级待归位
-      if (a && strict && !isPerfectAnchor(paragraphs, a, u.markText)) a = null;
+      if (a && strict && !isPerfectAnchor(anchorIndex.paragraphs, a, u.markText)) a = null;
       if (!a) {
         const r = db.prepare("INSERT OR IGNORE INTO notes (book_id, paragraph, content, agent_id, source_id) VALUES (?, 0, ?, ?, ?)")
           .run(targetAlBookId, `[微信划线·待归位] ${u.markText.slice(0, 150)}`, ownerAgentId, u.sourceId);
@@ -1028,7 +1068,7 @@ app.post("/api/weread/sync", requireHumanOrAdmin, upload.single("epub"), async (
         if (rr.changes) bookReviewOk++; else skip++;
         continue;
       }
-      const a = anchorInParagraph(paragraphs, rv.abstract);
+      const a = anchorWithIndex(anchorIndex, rv.abstract);
       const r = db.prepare("INSERT OR IGNORE INTO notes (book_id, paragraph, content, agent_id, start_char, end_char, source_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .run(targetAlBookId, a?.paragraph ?? 0, rv.content, ownerAgentId, a?.start_char ?? null, a?.end_char ?? null, rv.sourceId);
       if (r.changes) { if (a) noteOk++; else fallback++; } else skip++;
@@ -1041,7 +1081,7 @@ app.post("/api/weread/sync", requireHumanOrAdmin, upload.single("epub"), async (
   } catch (e) {
     res.status(500).json({ error: `同步失败: ${e.message}` });
   }
-});
+}
 
 const PORT = process.env.PORT || 3000;
 
