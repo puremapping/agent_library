@@ -558,6 +558,17 @@
         const color = bookCoverColor(b.title);
         const me = state.agents.find((a) => a.name === state.currentAgent);
         const canDel = (me && b.created_by === me.id) || me?.is_admin || !b.created_by;
+        // 连载壳书 → 文件夹卡片
+        if (b.is_series_shell) {
+          return `
+          <div class="book-card" style="background:linear-gradient(160deg, ${color.light}, ${color.dark});" onclick="openSerialFolder(${b.id})">
+            <div class="meta">📁 连载${canDel ? `<span style="float:right;cursor:pointer;" onclick="event.stopPropagation();delBook(${b.id})" title="删除连载">🗑</span>` : ""}</div>
+            <div class="title">${esc(b.title)}</div>
+            <div>
+              <div class="stats">点击查看章节</div>
+            </div>
+          </div>`;
+        }
         return `
         <div class="book-card" style="background:linear-gradient(160deg, ${color.light}, ${color.dark});" onclick="openBook(${b.id})">
           <div class="meta">#${b.id} · ${b.word_count} 字${canDel ? `<span style="float:right;cursor:pointer;" onclick="event.stopPropagation();delBook(${b.id})" title="删除书">🗑</span>` : ""}</div>
@@ -610,6 +621,46 @@
       if (!res.ok) return toast("上传失败");
       const book = await res.json();
       toast(`已上传《${book.title}》`);
+      loadShelf();
+    }
+
+    // ---------- 连载文件夹（P3） ----------
+    async function openSerialFolder(seriesId) {
+      const res = await api(`/api/serials/${seriesId}`);
+      if (!res.ok) return toast("加载连载失败");
+      const data = await res.json();
+      state.serialFolder = data;
+      renderSerialFolder();
+    }
+    function renderSerialFolder() {
+      const s = state.serialFolder;
+      const list = $("#book-list");
+      // 隐藏上传区，展示章节列表
+      $("#upload-zone").style.display = "none";
+      list.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <div style="font-size:16px;font-weight:600;">📁 ${esc(s.title)}</div>
+          <button class="btn-back" onclick="closeSerialFolder()">← 返回书架</button>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">共 ${s.chapters.length} 章</div>
+        <div id="serial-chapter-list" style="display:flex;flex-wrap:wrap;gap:12px;"></div>`;
+      const listEl = $("#serial-chapter-list");
+      if (!s.chapters.length) {
+        listEl.innerHTML = '<div class="empty">还没有章节。作者用 add_serial_chapter 追加章节。</div>';
+        return;
+      }
+      listEl.innerHTML = s.chapters.map((c, i) => {
+        const color = bookCoverColor(c.title || `第${i + 1}章`);
+        return `
+          <div class="book-card" style="width:150px;background:linear-gradient(160deg, ${color.light}, ${color.dark});" onclick="openBook(${c.id})">
+            <div class="meta">第${i + 1}章 · ${c.word_count} 字</div>
+            <div class="title" style="font-size:14px;">${esc(c.title || `第${i + 1}章`)}</div>
+          </div>`;
+      }).join("");
+    }
+    function closeSerialFolder() {
+      state.serialFolder = null;
+      $("#upload-zone").style.display = "";
       loadShelf();
     }
 

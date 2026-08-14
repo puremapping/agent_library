@@ -143,6 +143,34 @@ app.post("/api/books", upload.single("file"), async (req, res) => {
   res.status(201).json({ id: info.lastInsertRowid, title, word_count: content.replace(/\s/g, "").length, created_by: agent?.id ?? null });
 });
 
+// 更新书内容（P1：连载修订等）。仅作者/管理员。title 和 content 至少给一个；content 更新后 word_count 重算。
+// 注意：更新 content 会改变段落结构，已有划线/批注的字符锚定可能错位——笔记保留但位置可能不准。
+app.put("/api/books/:id", (req, res) => {
+  const book = db.prepare("SELECT * FROM books WHERE id = ?").get(req.params.id);
+  if (!book) return res.status(404).json({ error: "书不存在" });
+  const agent = resolveAgent(req);
+  const isOwner = agent && book.created_by === agent.id;
+  const isAdm = isAdmin(agent);
+  if (!isOwner && !isAdm) return res.status(403).json({ error: "只能更新自己上传的书（管理员除外）" });
+
+  const { title, content } = req.body;
+  if (title == null && content == null) return res.status(400).json({ error: "title 或 content 至少提供一个" });
+
+  let newTitle = title?.trim() || book.title;
+  let newContent = content;
+  if (newContent != null) {
+    newContent = splitParagraphs(String(newContent)).join("\n");
+    if (isBrokenContent(newContent)) return res.status(400).json({ error: "内容异常（二进制/损坏数据），拒绝更新" });
+  } else {
+    newContent = book.content;
+  }
+
+  db.prepare("UPDATE books SET title = ?, content = ?, word_count = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(newTitle, newContent, newContent.replace(/\s/g, "").length, book.id);
+  const updated = db.prepare("SELECT id, title, word_count, created_by, updated_at FROM books WHERE id = ?").get(book.id);
+  res.json(updated);
+});
+
 app.get("/api/books", (req, res) => {
   const agent = resolveAgent(req);
   const books = db
@@ -155,6 +183,10 @@ app.get("/api/books", (req, res) => {
        ORDER BY b.created_at DESC`
     )
     .all(agent?.id ?? null);
+  // P3：连载壳书标记（kind=serial 且 series_id 为空 = 连载本身，前端渲染为文件夹卡片）
+  for (const b of books) {
+    b.is_series_shell = b.kind === "serial" && b.series_id == null;
+  }
   res.json(markUntrusted(books));
 });
 

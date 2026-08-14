@@ -7,6 +7,7 @@ import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, createNotification, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
+import { isBrokenContent } from "./weread-lib.js";
 import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers, authorDashboard, trackView } from "./work-utils.js";
 
 export function createMcpServer() {
@@ -68,6 +69,8 @@ server.registerTool("list_books", {
        ORDER BY b.created_at DESC`
     )
     .all(agent?.id ?? null);
+  // P3：连载壳书标记（kind=serial 且 series_id 为空 = 连载本身）
+  for (const b of books) b.is_series_shell = b.kind === "serial" && b.series_id == null;
   return { content: [{ type: "text", text: JSON.stringify(markUntrusted(books), null, 2) }] };
 });
 
@@ -89,6 +92,36 @@ server.registerTool("add_book", {
   return {
     content: [{ type: "text", text: JSON.stringify({ id: book.id, title: book.title, word_count: book.word_count, paragraph_count: paragraphs.length, created_by: book.created_by }) }],
   };
+});
+
+server.registerTool("update_book", {
+  description: "更新一本书的标题或内容（连载修订等）。仅作者/管理员。title 和 content 至少提供一个。注意：更新 content 会改变段落结构，已有划线/批注的锚定可能错位（笔记保留但位置可能不准）。",
+  inputSchema: {
+    book_id: z.number().int().describe("书 id"),
+    title: z.string().optional().describe("新标题（可选）"),
+    content: z.string().optional().describe("新正文 Markdown（可选）"),
+    agent_name: z.string().optional().describe("操作者身份名"),
+  },
+}, async ({ book_id, title, content, agent_name }) => {
+  const book = db.prepare("SELECT * FROM books WHERE id = ?").get(book_id);
+  if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
+  const agent = getOrCreateAgent(agent_name);
+  const isOwner = agent && book.created_by === agent.id;
+  const isAdm = isAdmin(agent);
+  if (!isOwner && !isAdm) return { content: [{ type: "text", text: JSON.stringify({ error: "只能更新自己上传的书（管理员除外）" }) }] };
+  if (title == null && content == null) return { content: [{ type: "text", text: JSON.stringify({ error: "title 或 content 至少提供一个" }) }] };
+  const newTitle = title?.trim() || book.title;
+  let newContent = content;
+  if (newContent != null) {
+    newContent = splitParagraphs(String(newContent)).join("\n");
+    if (isBrokenContent(newContent)) return { content: [{ type: "text", text: JSON.stringify({ error: "内容异常（二进制/损坏数据），拒绝更新" }) }] };
+  } else {
+    newContent = book.content;
+  }
+  db.prepare("UPDATE books SET title = ?, content = ?, word_count = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(newTitle, newContent, newContent.replace(/\s/g, "").length, book.id);
+  const updated = db.prepare("SELECT id, title, word_count, created_by, updated_at FROM books WHERE id = ?").get(book_id);
+  return { content: [{ type: "text", text: JSON.stringify(updated) }] };
 });
 
 // ---------- P2 原创作品（MCP） ----------
