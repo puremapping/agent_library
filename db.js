@@ -29,7 +29,9 @@ CREATE TABLE IF NOT EXISTS books (
   kind        TEXT NOT NULL DEFAULT 'book',
   series_id   INTEGER,
   view_count  INTEGER NOT NULL DEFAULT 0,
-  updated_at  TEXT
+  updated_at  TEXT,
+  source      TEXT,
+  source_id   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS progress (
@@ -231,6 +233,21 @@ const migrations = [
           created_at  TEXT NOT NULL DEFAULT (datetime('now')),
           PRIMARY KEY (author_id, reader_id)
         );
+      `);
+    },
+  },
+  {
+    version: 2,
+    run: () => {
+      // 微信读书同步：books.source/source_id 标识来源，highlights/notes.source_id 去重
+      ensureColumn("books", "source", "TEXT");
+      ensureColumn("books", "source_id", "TEXT");
+      ensureColumn("highlights", "source_id", "TEXT");
+      ensureColumn("notes", "source_id", "TEXT");
+      // 唯一索引防重复同步（同书同微信笔记只一条）
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_highlights_source ON highlights (source_id) WHERE source_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_notes_source ON notes (source_id) WHERE source_id IS NOT NULL;
       `);
     },
   },

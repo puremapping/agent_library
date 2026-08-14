@@ -64,6 +64,14 @@ function charRangeWithinParagraph(bookId, paragraph, startChar, endChar) {
 app.post("/api/books", upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "请上传 .md 文件" });
 
+  // 来源标记 + 幂等：同 source_id（如微信读书 bookId）已存在则返回已有书，不重复上传
+  const source = req.body.source?.trim() || null;
+  const sourceId = req.body.source_id?.trim() || null;
+  if (source && sourceId) {
+    const existing = db.prepare("SELECT id FROM books WHERE source = ? AND source_id = ?").get(source, sourceId);
+    if (existing) return res.json({ id: existing.id, exists: true });
+  }
+
   let content = req.file.buffer.toString("utf-8");
   const title = req.body.title?.trim() || path.parse(req.file.originalname).name;
 
@@ -72,8 +80,8 @@ app.post("/api/books", upload.single("file"), (req, res) => {
 
   const agent = resolveAgent(req);
   const info = db
-    .prepare("INSERT INTO books (title, content, word_count, created_by, updated_at) VALUES (?, ?, ?, ?, datetime('now'))")
-    .run(title, content, content.replace(/\s/g, "").length, agent?.id ?? null);
+    .prepare("INSERT INTO books (title, content, word_count, created_by, updated_at, source, source_id) VALUES (?, ?, ?, ?, datetime('now'), ?, ?)")
+    .run(title, content, content.replace(/\s/g, "").length, agent?.id ?? null, source, sourceId);
 
   res.status(201).json({ id: info.lastInsertRowid, title, word_count: content.replace(/\s/g, "").length, created_by: agent?.id ?? null });
 });
@@ -319,8 +327,8 @@ app.post("/api/books/:id/highlights", (req, res) => {
 
   const agent = resolveAgent(req);
   const info = db
-    .prepare("INSERT INTO highlights (book_id, paragraph, text, color, agent_id, start_char, end_char) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(req.params.id, paragraph, finalText, color || "yellow", agent?.id ?? null, range.start_char, range.end_char);
+    .prepare("INSERT OR IGNORE INTO highlights (book_id, paragraph, text, color, agent_id, start_char, end_char, source_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(req.params.id, paragraph, finalText, color || "yellow", agent?.id ?? null, range.start_char, range.end_char, req.body.source_id ?? null);
 
   res.status(201).json(db.prepare("SELECT * FROM highlights WHERE id = ?").get(info.lastInsertRowid));
 });
@@ -379,8 +387,8 @@ app.post("/api/books/:id/notes", (req, res) => {
 
   const agent = resolveAgent(req);
   const info = db
-    .prepare("INSERT INTO notes (book_id, paragraph, content, agent_id, start_char, end_char) VALUES (?, ?, ?, ?, ?, ?)")
-    .run(req.params.id, paragraph, content.trim(), agent?.id ?? null, range.start_char, range.end_char);
+    .prepare("INSERT OR IGNORE INTO notes (book_id, paragraph, content, agent_id, start_char, end_char, source_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run(req.params.id, paragraph, content.trim(), agent?.id ?? null, range.start_char, range.end_char, req.body.source_id ?? null);
   const noteId = info.lastInsertRowid;
 
   // 通知：批注内容里 @ 人

@@ -363,8 +363,9 @@ server.registerTool("add_highlight", {
     end_char: z.number().int().optional().describe("段内结束字符偏移（不含）"),
     color: z.enum(["yellow", "blue", "green"]).optional().describe("可选，默认 yellow"),
     agent_name: z.string().optional().describe("身份名，如 \"小霁\"（可选）"),
+    source_id: z.string().optional().describe("外部来源唯一 id（微信读书同步用，防重复）"),
   },
-}, async ({ book_id, paragraph, text, start_char, end_char, color, agent_name }) => {
+}, async ({ book_id, paragraph, text, start_char, end_char, color, agent_name, source_id }) => {
   if (!paragraphWithinRange(book_id, paragraph)) {
     return { content: [{ type: "text", text: JSON.stringify({ error: "paragraph 超出正文范围" }) }] };
   }
@@ -384,8 +385,8 @@ server.registerTool("add_highlight", {
   }
   const agent = getOrCreateAgent(agent_name);
   const info = db
-    .prepare("INSERT INTO highlights (book_id, paragraph, text, color, agent_id, start_char, end_char) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(book_id, paragraph, text.trim(), color || "yellow", agent?.id ?? null, start_char ?? null, end_char ?? null);
+    .prepare("INSERT OR IGNORE INTO highlights (book_id, paragraph, text, color, agent_id, start_char, end_char, source_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(book_id, paragraph, text.trim(), color || "yellow", agent?.id ?? null, start_char ?? null, end_char ?? null, source_id ?? null);
   const h = db.prepare("SELECT * FROM highlights WHERE id = ?").get(info.lastInsertRowid);
   return { content: [{ type: "text", text: JSON.stringify({ ...h, agent_name: agent?.name ?? null }) }] };
 });
@@ -399,8 +400,9 @@ server.registerTool("add_note", {
     start_char: z.number().int().optional().describe("段内起始字符偏移（含）"),
     end_char: z.number().int().optional().describe("段内结束字符偏移（不含）"),
     agent_name: z.string().optional().describe("身份名，如 \"小霁\"（可选）"),
+    source_id: z.string().optional().describe("外部来源唯一 id（微信读书同步用，防重复）"),
   },
-}, async ({ book_id, paragraph, content, start_char, end_char, agent_name }) => {
+}, async ({ book_id, paragraph, content, start_char, end_char, agent_name, source_id }) => {
   if (!paragraphWithinRange(book_id, paragraph)) {
     return { content: [{ type: "text", text: JSON.stringify({ error: "paragraph 超出正文范围" }) }] };
   }
@@ -418,8 +420,8 @@ server.registerTool("add_note", {
   }
   const agent = getOrCreateAgent(agent_name);
   const info = db
-    .prepare("INSERT INTO notes (book_id, paragraph, content, agent_id, start_char, end_char) VALUES (?, ?, ?, ?, ?, ?)")
-    .run(book_id, paragraph, content.trim(), agent?.id ?? null, start_char ?? null, end_char ?? null);
+    .prepare("INSERT OR IGNORE INTO notes (book_id, paragraph, content, agent_id, start_char, end_char, source_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run(book_id, paragraph, content.trim(), agent?.id ?? null, start_char ?? null, end_char ?? null, source_id ?? null);
   const n = db.prepare("SELECT * FROM notes WHERE id = ?").get(info.lastInsertRowid);
 
   notifyForContent({

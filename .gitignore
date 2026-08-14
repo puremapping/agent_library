@@ -4,3 +4,5 @@ data/
 server.pid
 es_*
 ses_*
+ebooks/
+.weread-state.json
