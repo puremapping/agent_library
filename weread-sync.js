@@ -12,8 +12,10 @@ const KEY = process.env.WEREAD_API_KEY;
 if (!KEY) { console.error("需要 WEREAD_API_KEY 环境变量（wrk- 开头）"); process.exit(1); }
 const AL_BASE = process.env.AL_BASE || "http://localhost:3000";
 const AL_AGENT = process.env.AL_AGENT || "human";
-const PANDOC = "D:/fs/70_Software/pandoc/pandoc.exe";
-const EBOOK_CONVERT = "D:/fs/70_Software/calibre/ebook-convert.exe";
+// 工具与目录路径可配（服务器 Linux 用 /usr/bin/pandoc、ebook-convert，ebooks 目录按需设）
+const PANDOC = process.env.PANDOC_PATH || "D:/fs/70_Software/pandoc/pandoc.exe";
+const EBOOK_CONVERT = process.env.EBOOK_CONVERT_PATH || "D:/fs/70_Software/calibre/ebook-convert.exe";
+const EBOOKS_DIR = process.env.EBOOKS_DIR || path.join(import.meta.dirname, "ebooks");
 const SKILL_VER = "1.0.4";
 const STATE_FILE = path.join(import.meta.dirname, ".weread-state.json");
 
@@ -289,11 +291,11 @@ try {
     if (!epubPath) {
       // 从微信读书书名找 ebooks 目录下的书（epub/mobi/azw3，去标点模糊匹配）
       const info = await weread("/book/info", { bookId });
-      const candidates = fs.readdirSync("D:/ws/agent_library/ebooks").filter((f) => /\.(epub|mobi|azw3)$/i.test(f));
+      const candidates = fs.readdirSync(EBOOKS_DIR).filter((f) => /\.(epub|mobi|azw3)$/i.test(f));
       const strip = (s) => String(s).replace(/[\s[\]【】()（）·,，.:：=~"'“”]+/g, "");
       const titleKey = strip(info.title || "").slice(0, 6);
       const guess = candidates.find((f) => strip(f).includes(titleKey));
-      if (guess) epubPath = "D:/ws/agent_library/ebooks/" + guess;
+      if (guess) epubPath = EBOOKS_DIR + "/" + guess;
       if (!epubPath) { console.error(`未找到 ${info.title} 的本地电子书，请手动指定路径`); process.exit(1); }
     }
     if (cmd === "validate") await cmdValidate(bookId, epubPath);
