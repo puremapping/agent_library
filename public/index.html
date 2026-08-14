@@ -1708,7 +1708,7 @@
       list.innerHTML = '<div class="hint">加载微信读书书单…</div>';
       document.getElementById("weread-modal").classList.remove("hidden");
       try {
-        const res = await fetch("/api/weread/books");
+        const res = await fetch(`/api/weread/books?agent=${encodeURIComponent(state.currentAgent)}`);
         const data = await res.json();
         if (!res.ok) { list.innerHTML = `<div class="hint">${esc(data.error || "加载失败")}</div>`; return; }
         if (!data.length) { list.innerHTML = '<div class="hint">微信读书里没有带笔记的书</div>'; return; }
@@ -1739,7 +1739,7 @@
             btn.disabled = true; btn.textContent = "同步中…";
             result.textContent = "";
             try {
-              const r = await fetch("/api/weread/sync", {
+              const r = await fetch(`/api/weread/sync?agent=${encodeURIComponent(state.currentAgent)}`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ bookId: btn.dataset.sync }),
               });
@@ -1766,9 +1766,10 @@
             const fd = new FormData();
             fd.append("epub", file);
             fd.append("bookId", inp.dataset.book);
+            fd.append("agent", state.currentAgent);
             result.textContent = "上传电子书并同步中…";
             try {
-              const r = await fetch("/api/weread/sync", { method: "POST", body: fd });
+              const r = await fetch(`/api/weread/sync?agent=${encodeURIComponent(state.currentAgent)}`, { method: "POST", body: fd });
               const d = await r.json();
               if (!r.ok) result.textContent = `❌ ${d.error || "同步失败"}`;
               else result.textContent = `✅ 《${inp.dataset.title}》同步完成\n锚定 ${d.anchor.hit}/${d.anchor.total} (${d.anchor.rate}%)\n划线 ${d.highlights} / 想法 ${d.notes} / 待归位 ${d.fallback}`;
@@ -1783,7 +1784,7 @@
             if (!alid) return toast("请输入 AL 书 ID");
             result.textContent = "";
             try {
-              const r = await fetch("/api/weread/sync", {
+              const r = await fetch(`/api/weread/sync?agent=${encodeURIComponent(state.currentAgent)}`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ bookId: btn.dataset.usesrc, alBookId: alid }),
               });
