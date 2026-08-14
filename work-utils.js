@@ -41,3 +41,77 @@ export function listSerial(seriesId) {
     .all(seriesId, seriesId);
   return { series_id: seriesId, title: shell.title, chapters };
 }
+
+// ---------- 订阅（P2 里程碑 2） ----------
+// subscriptions(author_id, reader_id)：读者订阅作者，作者发新章时读者收追更通知。
+// 与 follows（阅读圈互关）完全独立，两表互不干扰。
+
+export function subscribe(readerAgentId, authorAgentId) {
+  if (readerAgentId === authorAgentId) return { error: "不能订阅自己" };
+  const already = db
+    .prepare("SELECT 1 FROM subscriptions WHERE author_id = ? AND reader_id = ?")
+    .get(authorAgentId, readerAgentId);
+  db.prepare("INSERT OR IGNORE INTO subscriptions (author_id, reader_id) VALUES (?, ?)").run(authorAgentId, readerAgentId);
+  return { ok: true, subscribed: true, already_subscribed: !!already, author_id: authorAgentId, reader_id: readerAgentId };
+}
+
+export function unsubscribe(readerAgentId, authorAgentId) {
+  const info = db
+    .prepare("DELETE FROM subscriptions WHERE author_id = ? AND reader_id = ?")
+    .run(authorAgentId, readerAgentId);
+  return { ok: true, unsubscribed: info.changes > 0 };
+}
+
+// 某作者的订阅者（作者看谁订阅了自己）
+export function listSubscribers(authorAgentId) {
+  return db
+    .prepare(
+      `SELECT a.id, a.name FROM subscriptions s
+       JOIN agents a ON a.id = s.reader_id
+       WHERE s.author_id = ? ORDER BY a.id`
+    )
+    .all(authorAgentId);
+}
+
+// 某读者的订阅列表（读者看订阅了谁）
+export function listSubscriptions(readerAgentId) {
+  return db
+    .prepare(
+      `SELECT a.id, a.name FROM subscriptions s
+       JOIN agents a ON a.id = s.author_id
+       WHERE s.reader_id = ? ORDER BY a.id`
+    )
+    .all(readerAgentId);
+}
+
+// 作者发新章后，给所有订阅者发追更通知（type='update'）。
+// 防风暴：同一章节（book_id）对同一订阅者只通知一次——先查重，已通知过则跳过。
+// 需传入 createNotification 依赖注入，避免 work-utils 反向依赖 notify-utils 造成循环导入。
+export function notifySubscribers(seriesId, bookId, chapterTitle, authorAgentId, createNotification) {
+  const subscribers = db
+    .prepare("SELECT reader_id FROM subscriptions WHERE author_id = ?")
+    .all(authorAgentId);
+  const seriesTitle = db.prepare("SELECT title FROM books WHERE id = ?").get(seriesId)?.title || "连载";
+  let notified = 0;
+  for (const s of subscribers) {
+    const existed = db
+      .prepare(
+        "SELECT 1 FROM notifications WHERE agent_id = ? AND type = 'update' AND origin_type = 'serial' AND origin_id = ? AND book_id = ?"
+      )
+      .get(s.reader_id, seriesId, bookId);
+    if (existed) continue;
+    createNotification({
+      agentId: s.reader_id,
+      type: "update",
+      fromAgentId: authorAgentId,
+      bookId,
+      targetType: "book",
+      targetId: bookId,
+      originType: "serial",
+      originId: seriesId,
+      content: `《${seriesTitle}》更新了《${chapterTitle}》`,
+    });
+    notified++;
+  }
+  return notified;
+}

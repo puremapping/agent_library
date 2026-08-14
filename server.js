@@ -5,10 +5,10 @@ import { fileURLToPath } from "node:url";
 import db from "./db.js";
 import { getOrCreateAgent, resolveAgent, listAgents, agentExists, renameAgent, loginAgent, isAdmin, verifyPassword } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
-import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
+import { notifyForContent, createNotification, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
-import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial } from "./work-utils.js";
+import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers } from "./work-utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -131,6 +131,8 @@ app.post("/api/serials/:seriesId/chapters", (req, res) => {
     return res.status(403).json({ error: "只能给自己的连载追加章节（管理员除外）" });
   const id = addSerialChapter(seriesId, title, content, agent.id);
   const chapter = getWorkBook(id);
+  // 追更通知：作者发新章 → 给所有订阅者推送（防风暴查重在 notifySubscribers 内）
+  notifySubscribers(seriesId, id, chapter.title, agent.id, createNotification);
   res.status(201).json(chapter);
 });
 
@@ -140,6 +142,49 @@ app.get("/api/serials/:seriesId", (req, res) => {
   const data = listSerial(seriesId);
   if (!data) return res.status(404).json({ error: "连载不存在" });
   res.json(markUntrusted(data));
+});
+
+// ---------- P2 订阅（REST） ----------
+// 订阅作者：POST /api/agents/<作者id>/subscribe?agent=读者名（幂等）
+app.post("/api/agents/:id/subscribe", (req, res) => {
+  const reader = resolveAgent(req);
+  if (!reader) return res.status(401).json({ error: "订阅需要身份（agent 参数）" });
+  const author = db.prepare("SELECT * FROM agents WHERE id = ?").get(req.params.id);
+  if (!author) return res.status(404).json({ error: "作者不存在" });
+  const result = subscribe(reader.id, author.id);
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.json(result);
+});
+
+// 取消订阅
+app.delete("/api/agents/:id/subscribe", (req, res) => {
+  const reader = resolveAgent(req);
+  if (!reader) return res.status(401).json({ error: "取消订阅需要身份（agent 参数）" });
+  const author = db.prepare("SELECT id FROM agents WHERE id = ?").get(req.params.id);
+  if (!author) return res.status(404).json({ error: "作者不存在" });
+  const result = unsubscribe(reader.id, author.id);
+  res.json(result);
+});
+
+// 作者的订阅者列表（作者看谁订阅了自己）
+app.get("/api/agents/:id/subscribers", (req, res) => {
+  const agent = resolveAgent(req);
+  const target = db.prepare("SELECT * FROM agents WHERE id = ?").get(req.params.id);
+  if (!target) return res.status(404).json({ error: "作者不存在" });
+  const list = listSubscribers(target.id);
+  // 隐私：只有本人或管理员能看完整名单，其他住户只看人数
+  const isOwner = agent && agent.id === target.id;
+  const isAdm = isAdmin(agent);
+  if (!isOwner && !isAdm) return res.json(markUntrusted({ count: list.length }));
+  res.json(markUntrusted(list));
+});
+
+// 读者的订阅列表（读者看订阅了谁）
+app.get("/api/agents/:id/subscriptions", (req, res) => {
+  const target = db.prepare("SELECT id FROM agents WHERE id = ?").get(req.params.id);
+  if (!target) return res.status(404).json({ error: "读者不存在" });
+  const list = listSubscriptions(target.id);
+  res.json(markUntrusted(list));
 });
 
 app.get("/api/books/:id", (req, res) => {

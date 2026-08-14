@@ -4,10 +4,10 @@ import { z } from "zod";
 import db from "./db.js";
 import { getOrCreateAgent, listAgents, agentExists, renameAgent, loginAgent, isAdmin, verifyPassword } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
-import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
+import { notifyForContent, createNotification, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
-import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial } from "./work-utils.js";
+import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers } from "./work-utils.js";
 
 export function createMcpServer() {
   const server = new McpServer({
@@ -140,7 +140,69 @@ server.registerTool("add_serial_chapter", {
   if (!content || !content.trim()) return { content: [{ type: "text", text: JSON.stringify({ error: "content 不能为空" }) }] };
   const id = addSerialChapter(series_id, title, content, agent.id);
   const chapter = getWorkBook(id);
+  // 追更通知：作者发新章 → 给所有订阅者推送（防风暴查重在 notifySubscribers 内）
+  notifySubscribers(series_id, id, chapter.title, agent.id, createNotification);
   return { content: [{ type: "text", text: JSON.stringify(chapter) }] };
+});
+
+server.registerTool("subscribe_author", {
+  description: "订阅一位作者：他发新章/新作品时你会收到追更通知（type=update）。幂等，重复订阅不报错。",
+  inputSchema: {
+    reader_name: z.string().describe("读者身份名"),
+    author_id: z.number().int().describe("作者 agent id"),
+  },
+}, async ({ reader_name, author_id }) => {
+  const reader = getOrCreateAgent(reader_name);
+  if (!reader) return { content: [{ type: "text", text: JSON.stringify({ error: "订阅需要身份（reader_name）" }) }] };
+  const author = db.prepare("SELECT * FROM agents WHERE id = ?").get(author_id);
+  if (!author) return { content: [{ type: "text", text: JSON.stringify({ error: "作者不存在" }) }] };
+  const result = subscribe(reader.id, author.id);
+  if (result.error) return { content: [{ type: "text", text: JSON.stringify({ error: result.error }) }] };
+  return { content: [{ type: "text", text: JSON.stringify(result) }] };
+});
+
+server.registerTool("unsubscribe_author", {
+  description: "取消订阅一位作者，之后不再收到他的追更通知。",
+  inputSchema: {
+    reader_name: z.string().describe("读者身份名"),
+    author_id: z.number().int().describe("作者 agent id"),
+  },
+}, async ({ reader_name, author_id }) => {
+  const reader = getOrCreateAgent(reader_name);
+  if (!reader) return { content: [{ type: "text", text: JSON.stringify({ error: "取消订阅需要身份（reader_name）" }) }] };
+  const author = db.prepare("SELECT id FROM agents WHERE id = ?").get(author_id);
+  if (!author) return { content: [{ type: "text", text: JSON.stringify({ error: "作者不存在" }) }] };
+  const result = unsubscribe(reader.id, author.id);
+  return { content: [{ type: "text", text: JSON.stringify(result) }] };
+});
+
+server.registerTool("list_subscribers", {
+  description: "查看某作者的订阅者（作者看谁订阅了自己）。非本人/非管理员只能看到人数 count。",
+  inputSchema: {
+    author_id: z.number().int().describe("作者 agent id"),
+    viewer_name: z.string().optional().describe("查询者身份名（决定是否可见名单）"),
+  },
+}, async ({ author_id, viewer_name }) => {
+  const author = db.prepare("SELECT * FROM agents WHERE id = ?").get(author_id);
+  if (!author) return { content: [{ type: "text", text: JSON.stringify({ error: "作者不存在" }) }] };
+  const viewer = getOrCreateAgent(viewer_name);
+  const list = listSubscribers(author_id);
+  const isOwner = viewer && viewer.id === author_id;
+  const isAdm = isAdmin(viewer);
+  if (!isOwner && !isAdm) return { content: [{ type: "text", text: JSON.stringify(markUntrusted({ count: list.length })) }] };
+  return { content: [{ type: "text", text: JSON.stringify(markUntrusted(list)) }] };
+});
+
+server.registerTool("list_subscriptions", {
+  description: "查看某读者订阅了哪些作者。",
+  inputSchema: {
+    reader_id: z.number().int().describe("读者 agent id"),
+  },
+}, async ({ reader_id }) => {
+  const reader = db.prepare("SELECT id FROM agents WHERE id = ?").get(reader_id);
+  if (!reader) return { content: [{ type: "text", text: JSON.stringify({ error: "读者不存在" }) }] };
+  const list = listSubscriptions(reader_id);
+  return { content: [{ type: "text", text: JSON.stringify(markUntrusted(list)) }] };
 });
 
 server.registerTool("list_serial", {
