@@ -2,6 +2,7 @@ import express from "express";
 import multer from "multer";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeFileSync, unlinkSync, readFileSync, mkdirSync } from "node:fs";
 import db from "./db.js";
 import { getOrCreateAgent, resolveAgent, listAgents, agentExists, renameAgent, loginAgent, isAdmin, verifyPassword } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
@@ -9,7 +10,7 @@ import { notifyForContent, createNotification, getInbox, markRead, markAllRead, 
 import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
 import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers, authorDashboard, trackView } from "./work-utils.js";
-import { WEREAD_KEY, weread, listNotebooks, fetchNotes, toParagraphs, anchorInParagraph, anchorRate, findLocalBook } from "./weread-lib.js";
+import { WEREAD_KEY, PANDOC, EBOOK_CONVERT, weread, listNotebooks, fetchNotes, toParagraphs, anchorInParagraph, anchorRate, findLocalBook } from "./weread-lib.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -62,8 +63,8 @@ function charRangeWithinParagraph(bookId, paragraph, startChar, endChar) {
   return endChar <= paras[paragraph].length;
 }
 
-app.post("/api/books", upload.single("file"), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "请上传 .md 文件" });
+app.post("/api/books", upload.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "请上传文件（.md/.txt/.epub/.mobi）" });
 
   // 来源标记 + 幂等：同 source_id（如微信读书 bookId）已存在则返回已有书，不重复上传
   const source = req.body.source?.trim() || null;
@@ -73,8 +74,35 @@ app.post("/api/books", upload.single("file"), (req, res) => {
     if (existing) return res.json({ id: existing.id, exists: true });
   }
 
-  let content = req.file.buffer.toString("utf-8");
+  // 按扩展名分流：md/txt 直接读；epub/mobi 用 pandoc/calibre 转 md
+  const ext = path.extname(req.file.originalname).toLowerCase();
+  let content;
   const title = req.body.title?.trim() || path.parse(req.file.originalname).name;
+  if (ext === ".epub") {
+    const dataDir = path.join(__dirname, "data");
+    mkdirSync(dataDir, { recursive: true });
+    const epubTmp = path.join(dataDir, `_up_${Date.now()}.epub`);
+    const mdTmp = path.join(dataDir, `_up_${Date.now()}.md`);
+    writeFileSync(epubTmp, req.file.buffer);
+    const { execSync } = await import("node:child_process");
+    execSync(`"${PANDOC}" "${epubTmp}" -t gfm -o "${mdTmp}"`, { stdio: "pipe" });
+    unlinkSync(epubTmp);
+    content = readFileSync(mdTmp, "utf8");
+    unlinkSync(mdTmp);
+  } else if (ext === ".mobi" || ext === ".azw3") {
+    const dataDir = path.join(__dirname, "data");
+    mkdirSync(dataDir, { recursive: true });
+    const mobiTmp = path.join(dataDir, `_up_${Date.now()}${ext}`);
+    writeFileSync(mobiTmp, req.file.buffer);
+    const txtTmp = path.join(dataDir, `_up_${Date.now()}.txt`);
+    const { execSync } = await import("node:child_process");
+    execSync(`"${EBOOK_CONVERT}" "${mobiTmp}" "${txtTmp}"`, { stdio: "pipe", timeout: 300000 });
+    unlinkSync(mobiTmp);
+    content = readFileSync(txtTmp, "utf8");
+    unlinkSync(txtTmp);
+  } else {
+    content = req.file.buffer.toString("utf-8");
+  }
 
   const paragraphs = splitParagraphs(content);
   content = paragraphs.join("\n");
@@ -828,8 +856,16 @@ app.get("/api/agents/:id/following", (req, res) => {
 });
 
 // ---------- 微信读书同步（REST，供网页） ----------
-// 列出有笔记的书（需 WEREAD_API_KEY）
-app.get("/api/weread/books", async (req, res) => {
+// 权限：仅管理员 或 带密码的人类身份（防止任何人用服务器 key 拉取）
+function requireHumanOrAdmin(req, res, next) {
+  const agent = resolveAgent(req);
+  if (isAdmin(agent)) return next();
+  if (agent && agent.has_password) return next();
+  return res.status(403).json({ error: "仅限登录的人类用户或管理员操作微信同步" });
+}
+
+// 列出有笔记的书（需 WEREAD_API_KEY + 人类/管理员）
+app.get("/api/weread/books", requireHumanOrAdmin, async (req, res) => {
   try {
     if (!WEREAD_KEY) return res.status(503).json({ error: "服务器未配置 WEREAD_API_KEY" });
     const books = await listNotebooks();
@@ -843,11 +879,14 @@ app.get("/api/weread/books", async (req, res) => {
 });
 
 // 同步一本书的笔记
-// body: { bookId, alBookId? }  — alBookId 提供=场景一(挂已有书)；否则场景二(自动传书+笔记)
-app.post("/api/weread/sync", async (req, res) => {
-  const { bookId, alBookId } = req.body;
+// body: { bookId, alBookId?, epub? } — alBookId=场景一(挂已有书)；否则场景二(自动传书+笔记)；epub=上传的 epub 文件（multipart）
+app.post("/api/weread/sync", requireHumanOrAdmin, upload.single("epub"), async (req, res) => {
+  const bookId = req.body.bookId;
+  const alBookId = req.body.alBookId ? Number(req.body.alBookId) : undefined;
   if (!bookId) return res.status(400).json({ error: "bookId 必填" });
   if (!WEREAD_KEY) return res.status(503).json({ error: "服务器未配置 WEREAD_API_KEY" });
+  const caller = resolveAgent(req); // 笔记归属：调用者自己
+  const ownerAgentId = caller?.id ?? null;
   try {
     const notes = await fetchNotes(bookId);
     const info = await weread("/book/info", { bookId });
@@ -862,45 +901,59 @@ app.post("/api/weread/sync", async (req, res) => {
       db.prepare("UPDATE books SET source = 'weread', source_id = ? WHERE id = ?").run(bookId, alBookId);
       paragraphs = toParagraphs(book.content);
     } else {
-      // 场景二：自动找本地电子书传书
-      const local = findLocalBook(title);
-      if (!local) return res.status(400).json({ error: `未找到 ${title} 的本地电子书（epub/mobi/azw3），请先放入 ${process.env.EBOOKS_DIR || "ebooks/"} 或提供 alBookId` });
+      // 场景二：优先用上传的 epub，否则找本地电子书
+      let md = null;
+      if (req.file) {
+        // 上传的 epub → pandoc 转 md
+        const dataDir = path.join(__dirname, "data");
+        mkdirSync(dataDir, { recursive: true });
+        const epubTmp = path.join(dataDir, `_weread_up_${Date.now()}.epub`);
+        const mdTmp = path.join(dataDir, `_weread_up_${Date.now()}.md`);
+        writeFileSync(epubTmp, req.file.buffer);
+        const { execSync } = await import("node:child_process");
+        execSync(`"${PANDOC}" "${epubTmp}" -t gfm -o "${mdTmp}"`, { stdio: "pipe" });
+        unlinkSync(epubTmp);
+        md = readFileSync(mdTmp, "utf8");
+        unlinkSync(mdTmp);
+      } else {
+        const local = findLocalBook(title);
+        if (!local) return res.status(400).json({ error: `未找到「${title}」的本地电子书，请在下方上传 epub，或提供 AL 书 ID` });
+        md = local.md;
+      }
       // 幂等：同 source_id 已有书则复用
       const existing = db.prepare("SELECT id FROM books WHERE source = 'weread' AND source_id = ?").get(bookId);
       if (existing) {
         targetAlBookId = existing.id;
       } else {
-        const paragraphsList = toParagraphs(local.md);
+        const paragraphsList = toParagraphs(md);
         const content = paragraphsList.join("\n");
-        const agent = db.prepare("SELECT id FROM agents WHERE name = ?").get("human")?.id ?? null;
         const ins = db.prepare("INSERT INTO books (title, content, word_count, created_by, updated_at, source, source_id) VALUES (?, ?, ?, ?, datetime('now'), 'weread', ?)")
-          .run(title, content, content.replace(/\s/g, "").length, agent, bookId);
+          .run(title, content, content.replace(/\s/g, "").length, ownerAgentId, bookId);
         targetAlBookId = ins.lastInsertRowid;
       }
-      paragraphs = toParagraphs(local.md);
+      paragraphs = toParagraphs(md);
     }
 
     // 锚定测试
     const ar = anchorRate(paragraphs, notes);
-    // 同步笔记（锚定失败 → 待归位）
-    const humanAgentId = db.prepare("SELECT id FROM agents WHERE name = ?").get("human")?.id ?? null;
+    // 同步笔记（锚定失败 → 待归位，归属调用者）
     let hlOk = 0, noteOk = 0, fallback = 0, skip = 0;
     for (const u of notes.underlines) {
       const a = anchorInParagraph(paragraphs, u.markText);
       if (!a) {
         const r = db.prepare("INSERT OR IGNORE INTO notes (book_id, paragraph, content, agent_id, source_id) VALUES (?, 0, ?, ?, ?)")
-          .run(targetAlBookId, `[微信划线·待归位] ${u.markText.slice(0, 150)}`, humanAgentId, u.sourceId);
+          .run(targetAlBookId, `[微信划线·待归位] ${u.markText.slice(0, 150)}`, ownerAgentId, u.sourceId);
         if (r.changes) fallback++; else skip++;
         continue;
       }
       const r = db.prepare("INSERT OR IGNORE INTO highlights (book_id, paragraph, text, color, agent_id, start_char, end_char, source_id) VALUES (?, ?, ?, 'yellow', ?, ?, ?, ?)")
-        .run(targetAlBookId, a.paragraph, u.markText.slice(0, 200), humanAgentId, a.start_char, a.end_char, u.sourceId);
+        .run(targetAlBookId, a.paragraph, u.markText.slice(0, 200), ownerAgentId, a.start_char, a.end_char, u.sourceId);
       if (r.changes) hlOk++; else skip++;
     }
     for (const rv of notes.reviews) {
       const a = rv.abstract ? anchorInParagraph(paragraphs, rv.abstract) : null;
       const r = db.prepare("INSERT OR IGNORE INTO notes (book_id, paragraph, content, agent_id, start_char, end_char, source_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .run(targetAlBookId, a?.paragraph ?? 0, rv.content, humanAgentId, a?.start_char ?? null, a?.end_char ?? null, rv.sourceId);
+        .run(targetAlBookId, a?.paragraph ?? 0, rv.content, ownerAgentId, a?.start_char ?? null, a?.end_char ?? null, rv.sourceId);
       if (r.changes) noteOk++; else skip++;
     }
 
