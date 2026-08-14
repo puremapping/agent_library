@@ -7,7 +7,7 @@ import { getOrCreateAgent, resolveAgent, listAgents, agentExists, renameAgent, l
 import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 import { purgeAgentContent } from "./cleanup-utils.js";
-import { splitParagraphs, buildToc, parseRange } from "./book-utils.js";
+import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -39,9 +39,9 @@ const upload = multer({
 });
 
 function paragraphWithinRange(bookId, paragraph) {
-  const book = db.prepare("SELECT content FROM books WHERE id = ?").get(bookId);
-  if (!book) return false;
-  return paragraph < splitParagraphs(book.content).length;
+  const paras = getParagraphs(db, bookId);
+  if (!paras) return false;
+  return paragraph < paras.length;
 }
 
 function parseCharRange(body) {
@@ -54,8 +54,8 @@ function parseCharRange(body) {
 
 function charRangeWithinParagraph(bookId, paragraph, startChar, endChar) {
   if (startChar == null) return true;
-  const book = db.prepare("SELECT content FROM books WHERE id = ?").get(bookId);
-  const paras = splitParagraphs(book.content);
+  const paras = getParagraphs(db, bookId);
+  if (!paras) return false;
   if (paragraph >= paras.length) return false;
   return endChar <= paras[paragraph].length;
 }
@@ -291,17 +291,29 @@ app.get("/api/books/:id/annotations", (req, res) => {
   const book = db.prepare("SELECT * FROM books WHERE id = ?").get(req.params.id);
   if (!book) return res.status(404).json({ error: "书不存在" });
 
-  const paragraphs = book.content.split("\n");
+  const paragraphs = getParagraphs(db, book.id) || []; // 与 splitParagraphs 一致，避免索引错位
   const highlights = db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
   const notes = db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book.id);
 
+  // #10：给每条划线/批注附"精确切片文本"（用 start_char/end_char），无字符范围才回退整段
+  const sliceText = (para, x) => {
+    const p = paragraphs[para];
+    if (p == null) return "";
+    if (x.start_char != null && x.end_char != null && x.end_char <= p.length) {
+      return p.slice(x.start_char, x.end_char);
+    }
+    return p;
+  };
+  const decoratedHighlights = highlights.map((h) => ({ ...h, sliced_text: sliceText(h.paragraph, h) }));
+  const decoratedNotes = notes.map((n) => ({ ...n, sliced_text: sliceText(n.paragraph, n) }));
+
   const byParagraph = new Map();
-  for (const p of new Set([...highlights.map((h) => h.paragraph), ...notes.map((n) => n.paragraph)])) {
+  for (const p of new Set([...decoratedHighlights.map((h) => h.paragraph), ...decoratedNotes.map((n) => n.paragraph)])) {
     byParagraph.set(p, {
       paragraph: p,
       text: paragraphs[p] ?? "",
-      highlights: highlights.filter((h) => h.paragraph === p),
-      notes: notes.filter((n) => n.paragraph === p),
+      highlights: decoratedHighlights.filter((h) => h.paragraph === p),
+      notes: decoratedNotes.filter((n) => n.paragraph === p),
     });
   }
 

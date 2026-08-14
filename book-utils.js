@@ -9,6 +9,32 @@ export function splitParagraphs(content) {
     .map((p) => p.trim());
 }
 
+// ---------- 段落缓存（#7） ----------
+// 大书（几万字/几千段）下 splitParagraphs 是 O(整本书)，每次划线/批注/越界校验都重算很浪费。
+// 简单内存缓存：key=book_id，value={ content, paragraphs }。
+// content 相同则直接复用；书内容变化（更新）时自然失效（content 哈希不同）。
+const paragraphCache = new Map();
+const CACHE_MAX = 200;
+
+export function getParagraphs(db, bookId) {
+  const book = db.prepare("SELECT content FROM books WHERE id = ?").get(bookId);
+  if (!book) return null;
+  const cached = paragraphCache.get(bookId);
+  if (cached && cached.content === book.content) return cached.paragraphs;
+  const paragraphs = splitParagraphs(book.content);
+  // 简单 LRU：超过上限删最早的
+  if (paragraphCache.size >= CACHE_MAX) {
+    const firstKey = paragraphCache.keys().next().value;
+    paragraphCache.delete(firstKey);
+  }
+  paragraphCache.set(bookId, { content: book.content, paragraphs });
+  return paragraphs;
+}
+
+export function clearParagraphCache() {
+  paragraphCache.clear();
+}
+
 // ---------- 章节识别（本书格式规范 §3.3） ----------
 
 const MD_HEADING_RE = /^(#{1,6})\s+/;

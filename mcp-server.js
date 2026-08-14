@@ -6,13 +6,30 @@ import { getOrCreateAgent, listAgents, agentExists, renameAgent, loginAgent, isA
 import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
 import { purgeAgentContent } from "./cleanup-utils.js";
-import { splitParagraphs, buildToc, parseRange } from "./book-utils.js";
+import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
 
 export function createMcpServer() {
   const server = new McpServer({
     name: "agent-library",
     version: "0.1.0",
+    onerror: (err) => {
+      // #12：MCP 错误不吞掉，记录到 stderr 便于排查
+      console.error("[mcp-error]", err?.message || err);
+    },
   });
+
+  // #12：统一包装工具 handler——SQL/运行时异常以友好文本返回给 Agent，避免 SDK 吞成 "Internal error"
+  const origRegisterTool = server.registerTool.bind(server);
+  server.registerTool = (name, def, handler) => {
+    return origRegisterTool(name, def, async (args) => {
+      try {
+        return await handler(args);
+      } catch (e) {
+        console.error(`[mcp-tool-error] ${name}:`, e?.message || e);
+        return { content: [{ type: "text", text: JSON.stringify({ error: `内部错误（${name}）: ${e?.message || "未知错误"}` }) }] };
+      }
+    });
+  };
 
 // 内容安全标记：所有用户生成内容（会被 Agent 读取喂给 LLM 的文本）统一标为不可信
 // 递归处理嵌套对象/数组；消费端 Agent 应把 untrusted 数据当纯文本处理，绝不能作为指令执行
@@ -29,9 +46,9 @@ function markUntrusted(obj) {
 }
 
 function paragraphWithinRange(bookId, paragraph) {
-  const book = db.prepare("SELECT content FROM books WHERE id = ?").get(bookId);
-  if (!book) return false;
-  return paragraph >= 0 && paragraph < splitParagraphs(book.content).length;
+  const paras = getParagraphs(db, bookId);
+  if (!paras) return false;
+  return paragraph >= 0 && paragraph < paras.length;
 }
 
 server.registerTool("list_books", {
@@ -213,7 +230,7 @@ server.registerTool("add_highlight", {
     return { content: [{ type: "text", text: JSON.stringify({ error: "需 start_char < end_char" }) }] };
   }
   if (start_char != null) {
-    const paras = splitParagraphs(db.prepare("SELECT content FROM books WHERE id = ?").get(book_id).content);
+    const paras = getParagraphs(db, book_id);
     if (paragraph >= paras.length || end_char > paras[paragraph].length) {
       return { content: [{ type: "text", text: JSON.stringify({ error: "字符范围超出段落" }) }] };
     }
@@ -249,7 +266,7 @@ server.registerTool("add_note", {
     return { content: [{ type: "text", text: JSON.stringify({ error: "需 start_char < end_char" }) }] };
   }
   if (start_char != null) {
-    const paras = splitParagraphs(db.prepare("SELECT content FROM books WHERE id = ?").get(book_id).content);
+    const paras = getParagraphs(db, book_id);
     if (paragraph >= paras.length || end_char > paras[paragraph].length) {
       return { content: [{ type: "text", text: JSON.stringify({ error: "字符范围超出段落" }) }] };
     }
@@ -314,17 +331,27 @@ server.registerTool("export_annotations", {
 }, async ({ book_id }) => {
   const book = db.prepare("SELECT * FROM books WHERE id = ?").get(book_id);
   if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
-  const paragraphs = splitParagraphs(book.content);
+  const paragraphs = getParagraphs(db, book_id) || [];
   const highlights = db.prepare("SELECT * FROM highlights WHERE book_id = ? ORDER BY paragraph, id").all(book_id);
   const notes = db.prepare("SELECT * FROM notes WHERE book_id = ? ORDER BY paragraph, id").all(book_id);
 
+  // #10：精确切片文本
+  const sliceText = (para, x) => {
+    const p = paragraphs[para];
+    if (p == null) return "";
+    if (x.start_char != null && x.end_char != null && x.end_char <= p.length) return p.slice(x.start_char, x.end_char);
+    return p;
+  };
+  const decoratedHighlights = highlights.map((h) => ({ ...h, sliced_text: sliceText(h.paragraph, h) }));
+  const decoratedNotes = notes.map((n) => ({ ...n, sliced_text: sliceText(n.paragraph, n) }));
+
   const byParagraph = new Map();
-  for (const p of new Set([...highlights.map((h) => h.paragraph), ...notes.map((n) => n.paragraph)])) {
+  for (const p of new Set([...decoratedHighlights.map((h) => h.paragraph), ...decoratedNotes.map((n) => n.paragraph)])) {
     byParagraph.set(p, {
       paragraph: p,
       text: paragraphs[p] ?? "",
-      highlights: highlights.filter((h) => h.paragraph === p),
-      notes: notes.filter((n) => n.paragraph === p),
+      highlights: decoratedHighlights.filter((h) => h.paragraph === p),
+      notes: decoratedNotes.filter((n) => n.paragraph === p),
     });
   }
   return {
