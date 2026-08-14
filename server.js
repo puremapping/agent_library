@@ -9,6 +9,7 @@ import { notifyForContent, createNotification, getInbox, markRead, markAllRead, 
 import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
 import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers, authorDashboard, trackView } from "./work-utils.js";
+import { WEREAD_KEY, weread, listNotebooks, fetchNotes, toParagraphs, anchorInParagraph, anchorRate, findLocalBook } from "./weread-lib.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -824,6 +825,92 @@ app.get("/api/agents/:id/following", (req, res) => {
     WHERE f.follower_id = ? ORDER BY a.id
   `).all(req.params.id);
   res.json(rows);
+});
+
+// ---------- 微信读书同步（REST，供网页） ----------
+// 列出有笔记的书（需 WEREAD_API_KEY）
+app.get("/api/weread/books", async (req, res) => {
+  try {
+    if (!WEREAD_KEY) return res.status(503).json({ error: "服务器未配置 WEREAD_API_KEY" });
+    const books = await listNotebooks();
+    const list = books.filter((b) => b.noteCount + b.reviewCount > 0).map((b) => ({
+      bookId: b.bookId, title: b.book?.title, noteCount: b.noteCount, reviewCount: b.reviewCount, format: b.book?.format,
+    }));
+    res.json(markUntrusted(list));
+  } catch (e) {
+    res.status(500).json({ error: `拉取微信读书书单失败: ${e.message}` });
+  }
+});
+
+// 同步一本书的笔记
+// body: { bookId, alBookId? }  — alBookId 提供=场景一(挂已有书)；否则场景二(自动传书+笔记)
+app.post("/api/weread/sync", async (req, res) => {
+  const { bookId, alBookId } = req.body;
+  if (!bookId) return res.status(400).json({ error: "bookId 必填" });
+  if (!WEREAD_KEY) return res.status(503).json({ error: "服务器未配置 WEREAD_API_KEY" });
+  try {
+    const notes = await fetchNotes(bookId);
+    const info = await weread("/book/info", { bookId });
+    const title = info.title || bookId;
+
+    let targetAlBookId = alBookId;
+    let paragraphs;
+    if (alBookId) {
+      // 场景一：挂已有 AL 书
+      const book = db.prepare("SELECT content FROM books WHERE id = ?").get(alBookId);
+      if (!book) return res.status(404).json({ error: "目标 AL 书不存在" });
+      db.prepare("UPDATE books SET source = 'weread', source_id = ? WHERE id = ?").run(bookId, alBookId);
+      paragraphs = toParagraphs(book.content);
+    } else {
+      // 场景二：自动找本地电子书传书
+      const local = findLocalBook(title);
+      if (!local) return res.status(400).json({ error: `未找到 ${title} 的本地电子书（epub/mobi/azw3），请先放入 ${process.env.EBOOKS_DIR || "ebooks/"} 或提供 alBookId` });
+      // 幂等：同 source_id 已有书则复用
+      const existing = db.prepare("SELECT id FROM books WHERE source = 'weread' AND source_id = ?").get(bookId);
+      if (existing) {
+        targetAlBookId = existing.id;
+      } else {
+        const paragraphsList = toParagraphs(local.md);
+        const content = paragraphsList.join("\n");
+        const agent = db.prepare("SELECT id FROM agents WHERE name = ?").get("human")?.id ?? null;
+        const ins = db.prepare("INSERT INTO books (title, content, word_count, created_by, updated_at, source, source_id) VALUES (?, ?, ?, ?, datetime('now'), 'weread', ?)")
+          .run(title, content, content.replace(/\s/g, "").length, agent, bookId);
+        targetAlBookId = ins.lastInsertRowid;
+      }
+      paragraphs = toParagraphs(local.md);
+    }
+
+    // 锚定测试
+    const ar = anchorRate(paragraphs, notes);
+    // 同步笔记（锚定失败 → 待归位）
+    const humanAgentId = db.prepare("SELECT id FROM agents WHERE name = ?").get("human")?.id ?? null;
+    let hlOk = 0, noteOk = 0, fallback = 0, skip = 0;
+    for (const u of notes.underlines) {
+      const a = anchorInParagraph(paragraphs, u.markText);
+      if (!a) {
+        const r = db.prepare("INSERT OR IGNORE INTO notes (book_id, paragraph, content, agent_id, source_id) VALUES (?, 0, ?, ?, ?)")
+          .run(targetAlBookId, `[微信划线·待归位] ${u.markText.slice(0, 150)}`, humanAgentId, u.sourceId);
+        if (r.changes) fallback++; else skip++;
+        continue;
+      }
+      const r = db.prepare("INSERT OR IGNORE INTO highlights (book_id, paragraph, text, color, agent_id, start_char, end_char, source_id) VALUES (?, ?, ?, 'yellow', ?, ?, ?, ?)")
+        .run(targetAlBookId, a.paragraph, u.markText.slice(0, 200), humanAgentId, a.start_char, a.end_char, u.sourceId);
+      if (r.changes) hlOk++; else skip++;
+    }
+    for (const rv of notes.reviews) {
+      const a = rv.abstract ? anchorInParagraph(paragraphs, rv.abstract) : null;
+      const r = db.prepare("INSERT OR IGNORE INTO notes (book_id, paragraph, content, agent_id, start_char, end_char, source_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(targetAlBookId, a?.paragraph ?? 0, rv.content, humanAgentId, a?.start_char ?? null, a?.end_char ?? null, rv.sourceId);
+      if (r.changes) noteOk++; else skip++;
+    }
+
+    res.json(markUntrusted({
+      ok: true, alBookId: targetAlBookId, title,
+      anchor: ar, highlights: hlOk, notes: noteOk, fallback, skipped: skip,
+    }));
+  } catch (e) {
+    res.status(500).json({ error: `同步失败: ${e.message}` });
+  }
 });
 
 const PORT = process.env.PORT || 3000;

@@ -267,6 +267,7 @@
     <span id="btn-back" class="btn-back hidden">← 返回书架</span>
     <h1 id="header-title">agent-library</h1>
     <span class="spacer"></span>
+    <button id="btn-weread" class="header-link" title="从微信读书同步笔记">📥 微信同步</button>
     <a href="/guide.html" target="_blank" class="header-link" title="使用说明">📖 Guide</a>
     <a href="https://github.com/puremapping/agent_library" target="_blank" class="header-link" title="GitHub 仓库">GitHub</a>
     <button id="btn-export" class="btn-export hidden">导出批注</button>
@@ -349,6 +350,20 @@
       <div class="row">
         <button class="cancel" data-close="login-modal">取消</button>
         <button class="save" id="login-submit">登录 / 注册</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="weread-modal" class="modal hidden">
+    <div class="box" style="width:min(620px,90vw);max-height:80vh;display:flex;flex-direction:column;">
+      <div style="font-size:14px;font-weight:600;margin-bottom:4px;">📥 从微信读书同步笔记</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">把你在微信读书的划线/想法同步到图书馆（只拉划线+想法，不拉书签）。同步的人类笔记归 human 身份，Agent 可读可回复。</div>
+      <div id="weread-list" style="flex:1;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px;min-height:200px;font-size:13px;">
+        <div class="hint">加载中…</div>
+      </div>
+      <div id="weread-result" style="font-size:13px;color:var(--accent);margin-top:8px;white-space:pre-wrap;"></div>
+      <div class="row">
+        <button class="cancel" data-close="weread-modal">关闭</button>
       </div>
     </div>
   </div>
@@ -1683,6 +1698,49 @@
     });
     document.querySelectorAll(".modal").forEach((m) => {
       m.addEventListener("mousedown", (e) => { if (e.target === m) m.classList.add("hidden"); });
+    });
+
+    // ---------- 微信读书同步 ----------
+    document.getElementById("btn-weread").addEventListener("click", async () => {
+      const list = document.getElementById("weread-list");
+      const result = document.getElementById("weread-result");
+      result.textContent = "";
+      list.innerHTML = '<div class="hint">加载微信读书书单…</div>';
+      document.getElementById("weread-modal").classList.remove("hidden");
+      try {
+        const res = await fetch("/api/weread/books");
+        const data = await res.json();
+        if (!res.ok) { list.innerHTML = `<div class="hint">${esc(data.error || "加载失败")}</div>`; return; }
+        if (!data.length) { list.innerHTML = '<div class="hint">微信读书里没有带笔记的书</div>'; return; }
+        list.innerHTML = data.map((b, i) => `
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid var(--border);">
+            <span style="color:var(--muted);width:22px;flex-shrink:0;">${i + 1}</span>
+            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(b.title)}">${esc(b.title)}</span>
+            <span style="color:var(--muted);font-size:12px;flex-shrink:0;">划线${b.noteCount}/想法${b.reviewCount}</span>
+            <button class="save" style="padding:4px 10px;font-size:12px;" data-sync="${esc(b.bookId)}" data-title="${esc(b.title)}">同步</button>
+          </div>`).join("");
+        list.querySelectorAll("[data-sync]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            btn.disabled = true; btn.textContent = "同步中…";
+            result.textContent = "";
+            try {
+              const r = await fetch("/api/weread/sync", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ bookId: btn.dataset.sync }),
+              });
+              const d = await r.json();
+              if (!r.ok) { result.textContent = `❌ ${d.error || "同步失败"}`; }
+              else {
+                const anchorTxt = d.anchor ? `锚定 ${d.anchor.hit}/${d.anchor.total} (${d.anchor.rate}%)` : "";
+                result.textContent = `✅ 《${btn.dataset.title}》同步完成\n${anchorTxt}\n划线 ${d.highlights} / 想法 ${d.notes} / 待归位 ${d.fallback}${d.skipped ? ` / 去重跳过 ${d.skipped}` : ""}`;
+              }
+            } catch (e) { result.textContent = `❌ 同步失败: ${e.message}`; }
+            btn.disabled = false; btn.textContent = "同步";
+          });
+        });
+      } catch (e) {
+        list.innerHTML = `<div class="hint">加载失败: ${esc(e.message)}</div>`;
+      }
     });
 
     // ---------- 滚动进度 ----------

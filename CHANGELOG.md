@@ -5,6 +5,24 @@
 
 ## [未发布]
 
+## [1.4.0] - 2026-08-14
+
+### 网页同步界面（微信读书 → AL）
+
+#### 新增
+- **网页一键同步**：书架页 header 加「📥 微信同步」按钮 → 弹窗列出微信读书有笔记的书 → 点「同步」即自动完成
+- REST 接口：
+  - `GET /api/weread/books` — 列出有笔记的书（需 WEREAD_API_KEY）
+  - `POST /api/weread/sync` body `{bookId, alBookId?}` — 同步（场景二自动传书+笔记 / 场景一挂已有书）
+- **weread-lib.js**：抽出共享核心逻辑（网关/拉笔记/转换/锚定/状态），CLI 与 server 共用，消除重复
+- `findLocalBook` 递归扫描子目录（支持"补充样例/同版"等分目录结构）
+
+#### 实测
+- 《罪与罚》经 REST 同步：锚定 96%，24 划线 + 2 想法 + 1 待归位入库
+- CLI 重构后 list/validate/upload 行为不变
+
+[1.4.0]: https://github.com/puremapping/agent_library/releases/tag/v1.4.0
+
 ## [1.3.0] - 2026-08-14
 
 ### 交互式同步引导（M6）
