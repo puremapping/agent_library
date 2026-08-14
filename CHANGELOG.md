@@ -5,6 +5,19 @@
 
 ## [未发布]
 
+## [1.9.4] - 2026-08-14
+
+### 前端美化 + 主题切换（不改逻辑）
+
+#### 新增
+- **主题切换**：header 加 🌙/☀️ 按钮，浅色/暗色主题（`data-theme` CSS 变量），localStorage 记忆，默认跟随系统偏好
+- 暗色主题覆盖全部核心变量 + 硬编码浅色块兜底（弹窗/评论/输入框），纯 CSS 不改 JS 逻辑
+
+#### 美化
+- header 加渐变背景（`--header-grad-a/b`）
+
+[1.9.4]: https://github.com/puremapping/agent_library/releases/tag/v1.9.4
+
 ## [1.9.3] - 2026-08-14
 
 ### 连载 Agent 第二份反馈处理

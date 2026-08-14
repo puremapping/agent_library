@@ -14,7 +14,34 @@
       --accent: #4a6cf7;
       --border: #e8e6e1;
       --green: #2ebe79;
+      --header-grad-a: rgba(74, 108, 247, 0.08);
+      --header-grad-b: rgba(46, 190, 121, 0.05);
     }
+    /* 暗色主题 */
+    html[data-theme="dark"] {
+      --bg: #16181d;
+      --card: #1f232b;
+      --ink: #e4e6eb;
+      --muted: #8b919c;
+      --accent: #6d8bff;
+      --border: #2c313a;
+      --green: #34d28b;
+      --header-grad-a: rgba(109, 139, 255, 0.12);
+      --header-grad-b: rgba(52, 210, 139, 0.06);
+    }
+    /* 暗色下硬编码浅色块的兜底（不改 JS 逻辑） */
+    html[data-theme="dark"] .modal .cancel { background: #2c313a; color: #e4e6eb; }
+    html[data-theme="dark"] .modal .box textarea,
+    html[data-theme="dark"] .modal .box input[type="text"],
+    html[data-theme="dark"] .modal .box input[type="password"],
+    html[data-theme="dark"] .modal .box input[type="email"],
+    html[data-theme="dark"] .modal .box input[type="number"] {
+      background: var(--card); color: var(--ink); border-color: var(--border);
+    }
+    html[data-theme="dark"] [style*="background:#f7f6f3"] { background: #232830 !important; }
+    html[data-theme="dark"] [style*="background:#f0efec"] { background: #1b1f26 !important; }
+    html[data-theme="dark"] [style*="background:#f0f0f0"] { background: #2c313a !important; color: var(--ink); }
+    html[data-theme="dark"] .empty, html[data-theme="dark"] .hint { color: var(--muted); }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
@@ -28,11 +55,12 @@
       align-items: center;
       gap: 14px;
       padding: 12px 24px;
-      background: var(--card);
+      background: linear-gradient(135deg, var(--header-grad-a), var(--header-grad-b)), var(--card);
       border-bottom: 1px solid var(--border);
       position: sticky;
       top: 0;
       z-index: 10;
+      backdrop-filter: saturate(1.2);
     }
     header h1 { font-size: 17px; font-weight: 600; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     header .btn-back { cursor: pointer; color: var(--accent); font-size: 14px; flex-shrink: 0; }
@@ -52,6 +80,12 @@
       color: var(--muted); font-size: 13px; text-decoration: none; margin-right: 14px; flex-shrink: 0;
     }
     header .header-link:hover { color: var(--accent); text-decoration: underline; }
+    header .theme-btn {
+      border: 1px solid var(--border); background: var(--card); color: var(--muted);
+      border-radius: 8px; padding: 4px 10px; cursor: pointer; font-size: 13px; flex-shrink: 0;
+      transition: all 0.2s;
+    }
+    header .theme-btn:hover { color: var(--accent); border-color: var(--accent); }
 
     .container { max-width: 1200px; margin: 0 auto; padding: 24px 16px 80px; }
 
@@ -280,6 +314,7 @@
       <button class="mode-btn view-btn ${!state.previewMode?'active':''}" data-view="source" title="源码：原文精确，可划线批注">源码</button>
       <button class="mode-btn view-btn ${state.previewMode?'active':''}" data-view="preview" title="预览：渲染 Markdown 排版">预览</button>
     </div>
+    <button id="theme-btn" class="theme-btn" title="切换主题">🌙</button>
     <button id="login-btn" class="btn-export">🔑 未登录</button>
   </header>
 
@@ -412,6 +447,28 @@
       inbox: null,
       commentCollapse: {},
     };
+
+    // ---------- 主题切换 ----------
+    const savedTheme = localStorage.getItem("al-theme");
+    if (savedTheme === "dark") document.documentElement.setAttribute("data-theme", "dark");
+    else if (savedTheme === "light") document.documentElement.removeAttribute("data-theme");
+    else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) document.documentElement.setAttribute("data-theme", "dark");
+    function updateThemeBtn() {
+      const dark = document.documentElement.getAttribute("data-theme") === "dark";
+      document.getElementById("theme-btn").textContent = dark ? "☀️" : "🌙";
+    }
+    document.getElementById("theme-btn").addEventListener("click", () => {
+      const dark = document.documentElement.getAttribute("data-theme") === "dark";
+      if (dark) {
+        document.documentElement.removeAttribute("data-theme");
+        localStorage.setItem("al-theme", "light");
+      } else {
+        document.documentElement.setAttribute("data-theme", "dark");
+        localStorage.setItem("al-theme", "dark");
+      }
+      updateThemeBtn();
+    });
+    updateThemeBtn();
 
     const $ = (sel) => document.querySelector(sel);
 
