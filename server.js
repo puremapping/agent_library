@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFileSync, unlinkSync, readFileSync, mkdirSync } from "node:fs";
 import db from "./db.js";
-import { getOrCreateAgent, resolveAgent, listAgents, agentExists, renameAgent, loginAgent, isAdmin, verifyPassword } from "./agent-utils.js";
+import { getOrCreateAgent, resolveAgent, listAgents, agentExists, renameAgent, loginAgent, isAdmin, verifyPassword, getAgentByName } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, createNotification, getInbox, markRead, markAllRead, unreadCount, archiveNotification } from "./notify-utils.js";
 import { purgeAgentContent } from "./cleanup-utils.js";
@@ -33,6 +33,13 @@ function requireAuth(req, res, next) {
 
 app.use("/api", requireAuth);
 app.use("/mcp", requireAuth);
+
+// 严格身份解析：只返回已存在的身份，不自动注册。
+// 写/删除接口用它——防止用"已删除身份的名字"调 DELETE 时把死号自动复活。
+function resolveAgentStrict(req) {
+  const name = req.get("X-Agent-Name") || req.query.agent || req.body?.agent;
+  return getAgentByName(name);
+}
 
 // json 中间件只对 /api 生效，避免消费 /mcp 的原始 body
 app.use("/api", express.json({ limit: "20mb" }));
@@ -270,7 +277,7 @@ app.post("/api/agents/:id/subscribe", (req, res) => {
 
 // 取消订阅
 app.delete("/api/agents/:id/subscribe", (req, res) => {
-  const reader = resolveAgent(req);
+  const reader = resolveAgentStrict(req);
   if (!reader) return res.status(401).json({ error: "取消订阅需要身份（agent 参数）" });
   const author = db.prepare("SELECT id FROM agents WHERE id = ?").get(req.params.id);
   if (!author) return res.status(404).json({ error: "作者不存在" });
@@ -444,7 +451,7 @@ app.post("/api/books/:id/highlights", (req, res) => {
 app.delete("/api/highlights/:id", (req, res) => {
   const hl = db.prepare("SELECT * FROM highlights WHERE id = ?").get(req.params.id);
   if (!hl) return res.status(404).json({ error: "划线不存在" });
-  const agent = resolveAgent(req);
+  const agent = resolveAgentStrict(req);
   // 权限：只能删自己的，或删无主残留（agent_id 为空）
   if (hl.agent_id && (!agent || hl.agent_id !== agent.id))
     return res.status(403).json({ error: "只能删除自己的划线" });
@@ -461,7 +468,7 @@ app.patch("/api/highlights/:id", (req, res) => {
   const { color } = req.body;
   if (!["yellow", "blue", "green"].includes(color))
     return res.status(400).json({ error: "color 必须是 yellow/blue/green" });
-  const agent = resolveAgent(req);
+  const agent = resolveAgentStrict(req);
   if (!agent || (hl.agent_id && hl.agent_id !== agent.id))
     return res.status(403).json({ error: "只能修改自己的划线" });
   db.prepare("UPDATE highlights SET color = ? WHERE id = ?").run(color, hl.id);
@@ -471,7 +478,7 @@ app.patch("/api/highlights/:id", (req, res) => {
 app.delete("/api/notes/:id", (req, res) => {
   const note = db.prepare("SELECT * FROM notes WHERE id = ?").get(req.params.id);
   if (!note) return res.status(404).json({ error: "批注不存在" });
-  const agent = resolveAgent(req);
+  const agent = resolveAgentStrict(req);
   // 权限：只能删自己的，或删无主残留（agent_id 为空）
   if (note.agent_id && (!agent || note.agent_id !== agent.id))
     return res.status(403).json({ error: "只能删除自己的批注" });
@@ -554,7 +561,7 @@ app.get("/api/books/:id/annotations", (req, res) => {
 app.delete("/api/books/:id", (req, res) => {
   const book = db.prepare("SELECT id, title, word_count, created_by FROM books WHERE id = ?").get(req.params.id);
   if (!book) return res.status(404).json({ error: "书不存在" });
-  const agent = resolveAgent(req);
+  const agent = resolveAgentStrict(req);
   // 权限：上传者本人可删、管理员可删任意、无主书（created_by 空）任何带身份者可删
   if (book.created_by && (!agent || book.created_by !== agent.id) && !isAdmin(agent))
     return res.status(403).json({ error: "只能删除自己上传的书（管理员除外）" });
@@ -629,7 +636,7 @@ app.patch("/api/agents/:id/name", (req, res) => {
   const { name } = req.body;
   const agent = db.prepare("SELECT id, name FROM agents WHERE id = ?").get(req.params.id);
   if (!agent) return res.status(404).json({ error: "Agent 不存在" });
-  const caller = resolveAgent(req);
+  const caller = resolveAgentStrict(req);
   if (!caller) return res.status(400).json({ error: "需要操作者身份" });
   // 权限：管理员可改任意，否则只能改自己
   if (caller.id !== agent.id && !isAdmin(caller))
@@ -640,7 +647,7 @@ app.patch("/api/agents/:id/name", (req, res) => {
 });
 
 app.delete("/api/agents/me", (req, res) => {
-  const caller = resolveAgent(req);
+  const caller = resolveAgentStrict(req);
   if (!caller) return res.status(400).json({ error: "需要 agent 身份" });
   // 凭证保护（#4）：人类账号（设密码）必须验证密码才能删身份
   if (caller.has_password) {
@@ -655,7 +662,7 @@ app.delete("/api/agents/me", (req, res) => {
 app.delete("/api/agents/:id", (req, res) => {
   const agent = db.prepare("SELECT * FROM agents WHERE id = ?").get(req.params.id);
   if (!agent) return res.status(404).json({ error: "Agent 不存在" });
-  const caller = resolveAgent(req);
+  const caller = resolveAgentStrict(req);
   if (!caller) return res.status(400).json({ error: "需要 agent 身份" });
   // 权限：管理员可删任意，否则只能删自己
   if (caller.id !== agent.id && !isAdmin(caller))
@@ -685,7 +692,7 @@ app.delete("/api/likes", (req, res) => {
   const { target_type, target_id } = req.query.target_type ? req.query : (req.body || {});
   if (!target_type || !Number.isInteger(Number(target_id)))
     return res.status(400).json({ error: "target_type 和 target_id 必填" });
-  const agent = resolveAgent(req);
+  const agent = resolveAgentStrict(req);
   if (!agent) return res.status(400).json({ error: "需要身份" });
   db.prepare("DELETE FROM likes WHERE target_type = ? AND target_id = ? AND agent_id = ?").run(target_type, target_id, agent.id);
   res.json({ liked: false, like_count: db.prepare("SELECT COUNT(*) c FROM likes WHERE target_type = ? AND target_id = ?").get(target_type, target_id).c });
@@ -811,7 +818,7 @@ app.get("/api/comments", (req, res) => {
 app.delete("/api/comments/:id", (req, res) => {
   const comment = db.prepare("SELECT * FROM comments WHERE id = ?").get(req.params.id);
   if (!comment) return res.status(404).json({ error: "评论不存在" });
-  const agent = resolveAgent(req);
+  const agent = resolveAgentStrict(req);
   const isOwner = agent && comment.agent_id === agent.id;
   const isAdm = isAdmin(agent);
   if (!isOwner && !isAdm) return res.status(403).json({ error: "只能删除自己的评论（管理员除外）" });
@@ -823,7 +830,7 @@ app.delete("/api/comments/:id", (req, res) => {
 app.delete("/api/threads/:id", (req, res) => {
   const t = db.prepare("SELECT * FROM threads WHERE id = ?").get(req.params.id);
   if (!t) return res.status(404).json({ error: "讨论不存在" });
-  const agent = resolveAgent(req);
+  const agent = resolveAgentStrict(req);
   const isOwner = agent && t.agent_id === agent.id;
   const isAdm = isAdmin(agent);
   if (!isOwner && !isAdm) return res.status(403).json({ error: "只能删除自己的讨论（管理员除外）" });
@@ -835,7 +842,7 @@ app.delete("/api/threads/:id", (req, res) => {
 app.delete("/api/thread-messages/:id", (req, res) => {
   const m = db.prepare("SELECT * FROM thread_messages WHERE id = ?").get(req.params.id);
   if (!m) return res.status(404).json({ error: "发言不存在" });
-  const agent = resolveAgent(req);
+  const agent = resolveAgentStrict(req);
   const isOwner = agent && m.agent_id === agent.id;
   const isAdm = isAdmin(agent);
   if (!isOwner && !isAdm) return res.status(403).json({ error: "只能删除自己的发言（管理员除外）" });
@@ -847,7 +854,7 @@ app.delete("/api/thread-messages/:id", (req, res) => {
 app.delete("/api/reviews/:id", (req, res) => {
   const r = db.prepare("SELECT * FROM reviews WHERE id = ?").get(req.params.id);
   if (!r) return res.status(404).json({ error: "书评不存在" });
-  const agent = resolveAgent(req);
+  const agent = resolveAgentStrict(req);
   const isOwner = agent && r.agent_id === agent.id;
   const isAdm = isAdmin(agent);
   if (!isOwner && !isAdm) return res.status(403).json({ error: "只能删除自己的书评（管理员除外）" });
@@ -1004,7 +1011,7 @@ app.post("/api/agents/:id/follow", (req, res) => {
 });
 
 app.delete("/api/agents/:id/follow", (req, res) => {
-  const agent = resolveAgent(req);
+  const agent = resolveAgentStrict(req);
   if (!agent) return res.status(400).json({ error: "需要 X-Agent-Name 身份" });
   db.prepare("DELETE FROM follows WHERE follower_id = ? AND followee_id = ?").run(agent.id, req.params.id);
   res.json({ ok: true });

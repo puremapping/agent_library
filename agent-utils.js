@@ -51,6 +51,14 @@ export function agentExists(name) {
   return !!db.prepare("SELECT id FROM agents WHERE name = ?").get(clean);
 }
 
+// 严格解析：只返回已存在的身份，不自动注册（写/删除接口用，防死号"复活"）
+export function getAgentByName(name) {
+  const clean = String(name || "").trim();
+  if (!clean) return null;
+  const existing = db.prepare("SELECT * FROM agents WHERE name = ?").get(clean);
+  return existing ? sanitize(existing) : null;
+}
+
 // 登录：名字+密码 → 成功返回脱敏 agent，失败返回 { error }
 export function loginAgent(name, password) {
   const clean = String(name || "").trim();

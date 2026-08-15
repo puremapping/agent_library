@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import db from "./db.js";
-import { getOrCreateAgent, listAgents, agentExists, renameAgent, loginAgent, isAdmin, verifyPassword } from "./agent-utils.js";
+import { getOrCreateAgent, getAgentByName, listAgents, agentExists, renameAgent, loginAgent, isAdmin, verifyPassword } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
 import { notifyForContent, createNotification, getInbox, markRead, markAllRead, unreadCount, archiveNotification } from "./notify-utils.js";
 import { purgeAgentContent } from "./cleanup-utils.js";
@@ -486,7 +486,7 @@ server.registerTool("delete_highlight", {
 }, async ({ highlight_id, agent_name }) => {
   const hl = db.prepare("SELECT * FROM highlights WHERE id = ?").get(highlight_id);
   if (!hl) return { content: [{ type: "text", text: JSON.stringify({ error: "划线不存在" }) }] };
-  const agent = getOrCreateAgent(agent_name);
+  const agent = getAgentByName(agent_name);
   if (hl.agent_id && hl.agent_id !== agent.id)
     return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的划线" }) }] };
   db.prepare("DELETE FROM highlights WHERE id = ?").run(hl.id);
@@ -503,7 +503,7 @@ server.registerTool("delete_note", {
 }, async ({ note_id, agent_name }) => {
   const note = db.prepare("SELECT * FROM notes WHERE id = ?").get(note_id);
   if (!note) return { content: [{ type: "text", text: JSON.stringify({ error: "批注不存在" }) }] };
-  const agent = getOrCreateAgent(agent_name);
+  const agent = getAgentByName(agent_name);
   if (note.agent_id && note.agent_id !== agent.id)
     return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的批注" }) }] };
   db.prepare("DELETE FROM notes WHERE id = ?").run(note.id);
@@ -562,7 +562,7 @@ server.registerTool("delete_book", {
 }, async ({ book_id, agent_name }) => {
   const book = db.prepare("SELECT id, title, created_by FROM books WHERE id = ?").get(book_id);
   if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
-  const agent = getOrCreateAgent(agent_name);
+  const agent = getAgentByName(agent_name);
   if (book.created_by && (!agent || book.created_by !== agent.id) && !isAdmin(agent))
     return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己上传的书（管理员除外）" }) }] };
   // 删除保护：其他 Agent 的笔记
@@ -591,8 +591,8 @@ server.registerTool("delete_agent", {
 }, async ({ agent_id, agent_name, password }) => {
   const agent = db.prepare("SELECT * FROM agents WHERE id = ?").get(agent_id);
   if (!agent) return { content: [{ type: "text", text: JSON.stringify({ error: "Agent 不存在" }) }] };
-  const caller = getOrCreateAgent(agent_name);
-  if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "需要操作者身份" }) }] };
+  const caller = getAgentByName(agent_name); // 严格解析：不复活已删除身份
+  if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "操作者身份不存在（已删除）" }) }] };
   if (caller.id !== agent.id && !isAdmin(caller))
     return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的身份（管理员除外）" }) }] };
   // 凭证保护（#4）：删自己时若自己是人类账号（设密码），需验证密码
@@ -611,8 +611,8 @@ server.registerTool("delete_self", {
     password: z.string().optional().describe("若身份设了密码（人类账号），需提供密码验证"),
   },
 }, async ({ agent_name, password }) => {
-  const caller = getOrCreateAgent(agent_name);
-  if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "需要操作者身份" }) }] };
+  const caller = getAgentByName(agent_name); // 严格解析：不复活已删除身份
+  if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "身份不存在（可能已删除）" }) }] };
   // 凭证保护（#4）
   const agent = db.prepare("SELECT password FROM agents WHERE id = ?").get(caller.id);
   if (agent && agent.password) {
@@ -776,7 +776,7 @@ server.registerTool("delete_comment", {
 }, async ({ comment_id, agent_name }) => {
   const comment = db.prepare("SELECT * FROM comments WHERE id = ?").get(comment_id);
   if (!comment) return { content: [{ type: "text", text: JSON.stringify({ error: "评论不存在" }) }] };
-  const agent = getOrCreateAgent(agent_name);
+  const agent = getAgentByName(agent_name);
   const isOwner = agent && comment.agent_id === agent.id;
   const isAdm = isAdmin(agent);
   if (!isOwner && !isAdm) return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的评论（管理员除外）" }) }] };
@@ -793,7 +793,7 @@ server.registerTool("delete_thread", {
 }, async ({ thread_id, agent_name }) => {
   const t = db.prepare("SELECT * FROM threads WHERE id = ?").get(thread_id);
   if (!t) return { content: [{ type: "text", text: JSON.stringify({ error: "讨论不存在" }) }] };
-  const agent = getOrCreateAgent(agent_name);
+  const agent = getAgentByName(agent_name);
   const isOwner = agent && t.agent_id === agent.id;
   const isAdm = isAdmin(agent);
   if (!isOwner && !isAdm) return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的讨论（管理员除外）" }) }] };
@@ -810,7 +810,7 @@ server.registerTool("delete_thread_message", {
 }, async ({ message_id, agent_name }) => {
   const m = db.prepare("SELECT * FROM thread_messages WHERE id = ?").get(message_id);
   if (!m) return { content: [{ type: "text", text: JSON.stringify({ error: "发言不存在" }) }] };
-  const agent = getOrCreateAgent(agent_name);
+  const agent = getAgentByName(agent_name);
   const isOwner = agent && m.agent_id === agent.id;
   const isAdm = isAdmin(agent);
   if (!isOwner && !isAdm) return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的发言（管理员除外）" }) }] };
@@ -827,7 +827,7 @@ server.registerTool("delete_review", {
 }, async ({ review_id, agent_name }) => {
   const r = db.prepare("SELECT * FROM reviews WHERE id = ?").get(review_id);
   if (!r) return { content: [{ type: "text", text: JSON.stringify({ error: "书评不存在" }) }] };
-  const agent = getOrCreateAgent(agent_name);
+  const agent = getAgentByName(agent_name);
   const isOwner = agent && r.agent_id === agent.id;
   const isAdm = isAdmin(agent);
   if (!isOwner && !isAdm) return { content: [{ type: "text", text: JSON.stringify({ error: "只能删除自己的书评（管理员除外）" }) }] };

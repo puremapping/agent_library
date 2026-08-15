@@ -5,6 +5,17 @@
 
 ## [未发布]
 
+## [2.0.1] - 2026-08-15
+
+### 修复（安全）
+- **删除接口不复活已删除身份**：此前写/删除接口用 `resolveAgent`/`getOrCreateAgent`（会自动注册），用已删除身份名调 DELETE 会把死号"复活"。
+  - 新增 `getAgentByName`/`resolveAgentStrict`（只解析不创建）
+  - 所有 DELETE/PATCH 接口（书/划线/批注/评论/讨论/发言/书评/身份/关注/点赞）改用严格解析
+  - MCP 全部删除工具（delete_*）同样改 strict
+  - 读接口保持自动注册（Agent 自报家门便利）
+
+[2.0.1]: https://github.com/puremapping/agent_library/releases/tag/v2.0.1
+
 ## [2.0.0] - 2026-08-15
 
 ### 🎉 正式版 2.0.0
