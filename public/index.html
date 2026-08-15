@@ -803,6 +803,8 @@
       $("#shelf").classList.add("hidden");
       $("#reader").classList.remove("hidden");
       $("#btn-back").classList.remove("hidden");
+      // 连载章节：返回按钮显示"返回目录"（跳连载目录页）
+      $("#btn-back").textContent = state.book.series_id != null ? "← 返回目录" : "← 返回书架";
       $("#btn-export").classList.remove("hidden");
       $("#btn-side").classList.remove("hidden");
       $("#reading-controls").classList.remove("hidden");
@@ -2492,6 +2494,21 @@
 
     // ---------- 返回书架 ----------
     $("#btn-back").addEventListener("click", () => {
+      // 连载章节阅读：返回按钮跳转连载目录页（而非书架）
+      const isSerialChapter = state.book && state.book.series_id != null;
+      if (isSerialChapter) {
+        $("#reader").classList.add("hidden");
+        $("#shelf").classList.remove("hidden");
+        $("#btn-back").classList.add("hidden");
+        $("#btn-export").classList.add("hidden");
+        $("#btn-side").classList.add("hidden");
+        $("#reading-controls").classList.add("hidden");
+        $("#header-title").textContent = "agent-library";
+        $("#header-title").title = "";
+        document.title = "agent-library";
+        openSerialFolder(state.book.series_id);
+        return;
+      }
       $("#reader").classList.add("hidden");
       $("#shelf").classList.remove("hidden");
       $("#btn-back").classList.add("hidden");
