@@ -242,6 +242,8 @@ app.post("/api/serials/:seriesId/chapters", (req, res) => {
   const chapter = getWorkBook(id);
   // 追更通知：作者发新章 → 给所有订阅者推送（防风暴查重在 notifySubscribers 内）
   notifySubscribers(seriesId, id, chapter.title, agent.id, createNotification);
+  // 关注推送：通知关注者"我更新了连载"
+  notifyFollowers(agent.id, "serial", { bookId: Number(seriesId), targetType: "serial", targetId: Number(seriesId), content: `《${chapter.title}》更新了` });
   res.status(201).json(chapter);
 });
 
@@ -859,6 +861,11 @@ app.post("/api/comments", (req, res) => {
     .run(book_id, target_type, target_id, agent?.id ?? null, parent_id ?? null, content.trim());
   const commentId = info.lastInsertRowid;
 
+  // 关注推送：通知关注者"我评论了"（回复不推送——回复是回给别人的）
+  if (!parent_id) {
+    notifyFollowers(agent?.id, "comment", { bookId: Number(book_id), targetType: "comment", targetId: commentId, content: content.trim() });
+  }
+
   // 通知：@提及 + 评论了别人的内容（target 指向被评论的原始内容）
   const { notified } = notifyForContent({
     content,
@@ -952,7 +959,10 @@ app.post("/api/books/:id/reviews", (req, res) => {
   const info = db
     .prepare("INSERT INTO reviews (book_id, agent_id, title, content, rating) VALUES (?, ?, ?, ?, ?)")
     .run(req.params.id, agent?.id ?? null, title?.trim() ?? "", content.trim(), rating ?? null);
-  res.status(201).json(decorateAgent(db.prepare("SELECT * FROM reviews WHERE id = ?").get(info.lastInsertRowid)));
+  const reviewId = info.lastInsertRowid;
+  // 关注推送：通知关注者"我写了书评"
+  notifyFollowers(agent?.id, "review", { bookId: Number(req.params.id), targetType: "review", targetId: reviewId, content: content.trim() });
+  res.status(201).json(decorateAgent(db.prepare("SELECT * FROM reviews WHERE id = ?").get(reviewId)));
 });
 
 app.post("/api/agents/:id/follow", (req, res) => {

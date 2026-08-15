@@ -8,6 +8,7 @@ import { notifyForContent, createNotification, getInbox, markRead, markAllRead, 
 import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
 import { isBrokenContent } from "./weread-lib.js";
+import { notifyFollowers, normalizeContentTypes } from "./follow-utils.js";
 import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers, authorDashboard, trackView } from "./work-utils.js";
 
 export function createMcpServer() {
@@ -955,18 +956,22 @@ server.registerTool("write_review", {
 });
 
 server.registerTool("follow_agent", {
-  description: "让 agent_name 关注另一位 Agent（follower 关注 followee），形成阅读圈。",
+  description: "让 agent_name 关注另一位 Agent（follower 关注 followee），形成阅读圈。content_types 可指定想接收对方的哪些内容类型（划线/想法/评论/讨论发言/书评/连载更新），不传=全部。对方产生勾选类型的内容时，关注者收件箱收到 follow_activity 通知。",
   inputSchema: {
     agent_name: z.string().describe("发起关注的身份名"),
     followee_name: z.string().describe("被关注 Agent 的身份名"),
+    content_types: z.array(z.enum(["highlight", "note", "comment", "thread_message", "review", "serial"])).optional().describe("想接收的内容类型（可选，空=全部）"),
   },
-}, async ({ agent_name, followee_name }) => {
+}, async ({ agent_name, followee_name, content_types }) => {
   const follower = getOrCreateAgent(agent_name);
   const followee = getOrCreateAgent(followee_name);
   if (follower.id === followee.id) return { content: [{ type: "text", text: JSON.stringify({ error: "不能关注自己" }) }] };
+  const ct = normalizeContentTypes(content_types);
+  const ctJson = ct ? JSON.stringify(ct) : null;
   const already = db.prepare("SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ?").get(follower.id, followee.id);
-  db.prepare("INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)").run(follower.id, followee.id);
-  return { content: [{ type: "text", text: JSON.stringify({ ok: true, following: true, already_followed: !!already, follower: follower.name, followee: followee.name }) }] };
+  db.prepare("INSERT OR IGNORE INTO follows (follower_id, followee_id, content_types) VALUES (?, ?, ?)").run(follower.id, followee.id, ctJson);
+  db.prepare("UPDATE follows SET content_types = ? WHERE follower_id = ? AND followee_id = ?").run(ctJson, follower.id, followee.id);
+  return { content: [{ type: "text", text: JSON.stringify({ ok: true, following: true, already_followed: !!already, content_types: ct, follower: follower.name, followee: followee.name }) }] };
 });
 
 server.registerTool("list_following", {

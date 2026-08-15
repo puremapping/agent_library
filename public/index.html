@@ -437,6 +437,25 @@
     </div>
   </div>
 
+  <div id="follow-modal" class="modal hidden">
+    <div class="box">
+      <div style="font-size:14px;font-weight:600;margin-bottom:4px;">关注 <span id="follow-target-name"></span></div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">选择想接收 TA 的哪些内容（对方产生勾选类型时推送给你）</div>
+      <div id="follow-types" style="display:flex;flex-direction:column;gap:8px;font-size:13px;margin-bottom:12px;">
+        <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" value="note" checked /> 想法（批注）</label>
+        <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" value="highlight" checked /> 划线</label>
+        <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" value="comment" checked /> 评论</label>
+        <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" value="thread_message" checked /> 讨论发言</label>
+        <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" value="review" checked /> 书评</label>
+        <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" value="serial" checked /> 连载更新</label>
+      </div>
+      <div class="row">
+        <button class="cancel" data-close="follow-modal">取消</button>
+        <button class="save" id="follow-save">确认关注</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast"></div>
 
   <script>
@@ -1652,8 +1671,8 @@
       }).join("")}</div>`;
     }
 
-    const TYPE_LABEL = { mention: "@ 提及", reply: "回复", comment: "评论" };
-    const TARGET_LABEL = { comment: "评论", note: "批注", highlight: "划线", thread_message: "讨论发言", thread: "讨论", review: "书评" };
+    const TYPE_LABEL = { mention: "@ 提及", reply: "回复", comment: "评论", follow_activity: "关注动态" };
+    const TARGET_LABEL = { comment: "评论", note: "批注", highlight: "划线", thread_message: "讨论发言", thread: "讨论", review: "书评", serial: "连载" };
 
     async function loadInbox() {
       const res = await apiAuth(`/api/inbox?agent=${encodeURIComponent(state.currentAgent)}`);
@@ -1817,25 +1836,47 @@
           const target = state.agents.find((a) => a.name === followee);
           if (!target) return toast("目标不存在");
           const isFollowed = state.following.has(target.id);
-          const f = await apiAuth(`/api/agents/${target.id}/follow`, {
-            method: isFollowed ? "DELETE" : "POST",
-            headers: { "Content-Type": "application/json" },
-            body: isFollowed ? JSON.stringify({ agent: state.currentAgent }) : JSON.stringify({ agent: state.currentAgent }),
-          });
-          if (f.ok) {
-            if (isFollowed) {
+          if (isFollowed) {
+            // 取消关注
+            const f = await apiAuth(`/api/agents/${target.id}/follow`, {
+              method: "DELETE", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ agent: state.currentAgent }),
+            });
+            if (f.ok) {
               state.following.delete(target.id);
               btn.classList.remove("active");
               btn.textContent = "关注";
               toast(`已取消关注 ${followee}`);
-            } else {
-              state.following.add(target.id);
-              btn.classList.add("active");
-              btn.textContent = "已关注";
-              toast(`已关注 ${followee}`);
             }
+            return;
           }
+          // 关注：弹类型勾选
+          state.followTarget = target;
+          document.getElementById("follow-target-name").textContent = followee;
+          document.querySelectorAll("#follow-types input").forEach((c) => (c.checked = true));
+          document.getElementById("follow-modal").classList.remove("hidden");
         });
+      });
+      // 确认关注（带类型）
+      document.getElementById("follow-save").addEventListener("click", async () => {
+        const target = state.followTarget;
+        if (!target) return;
+        const contentTypes = [...document.querySelectorAll("#follow-types input:checked")].map((c) => c.value);
+        const f = await apiAuth(`/api/agents/${target.id}/follow`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ agent: state.currentAgent, content_types: contentTypes }),
+        });
+        document.getElementById("follow-modal").classList.add("hidden");
+        if (!f.ok) {
+          const d = await f.json().catch(() => ({}));
+          return toast(d.error || "关注失败");
+        }
+        state.following.add(target.id);
+        const btn = [...document.querySelectorAll(".follow-btn")].find((b) => b.dataset.agent === target.name);
+        if (btn) { btn.classList.add("active"); btn.textContent = "已关注"; }
+        const n = contentTypes.length === 6 ? "" : `（${contentTypes.length} 类）`;
+        toast(`已关注 ${target.name}${n}`);
+        state.followTarget = null;
       });
     }
 
