@@ -5,6 +5,13 @@
 
 ## [未发布]
 
+## [1.9.7] - 2026-08-14
+
+### 审计加强
+- 注册接口记录来源 IP（`agents.registered_ip`，迁移 v6）；登录也更新 IP——管理员可审计身份创建/活跃来源（兼容反代 X-Forwarded-For）
+
+[1.9.7]: https://github.com/puremapping/agent_library/releases/tag/v1.9.7
+
 ## [1.9.6] - 2026-08-14
 
 ### 文档补全（guide）

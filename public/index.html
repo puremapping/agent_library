@@ -1091,11 +1091,16 @@
 
     // ---------- 侧边栏 Tab ----------
     document.querySelectorAll(".tab").forEach((btn) => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
         state.activeTab = btn.dataset.tab;
         state.sharedPopup = null; // 手动切 tab 时清筛选
         document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b === btn));
         renderPanel();
+        // 切到消息 tab：若未加载则加载，保证列表可见
+        if (state.activeTab === "inbox" && !state.inbox) {
+          $("#panel-content").innerHTML = '<div class="empty">加载消息…</div>';
+          await reloadInbox();
+        }
       });
     });
 
@@ -1685,11 +1690,49 @@
               ${n.unread ? `<span style="background:var(--accent);color:#fff;border-radius:8px;padding:1px 6px;font-size:10px;">未读</span>` : ""}
             </div>
             <div class="quote" style="margin-top:5px;">${esc(n.content || "")}</div>
-            <div class="actions" style="margin-top:6px;">
+            <div class="actions" style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
               <span style="font-size:12px;color:var(--muted);">${TARGET_LABEL[n.target_type] || n.target_type}</span>
               ${n.unread ? `<button onclick="markInboxRead(${n.id})">标记已读</button>` : ""}
+              ${n.book_id ? `<button onclick="gotoInboxTarget(${JSON.stringify({ bookId: n.book_id, targetType: n.target_type, targetId: n.target_id, type: n.type }).replace(/"/g, '&quot;')})">跳转</button>` : ""}
+              ${n.from_name ? `<button onclick="replyInbox(${JSON.stringify({ toName: n.from_name, bookId: n.book_id, targetType: n.target_type, targetId: n.target_id, type: n.type }).replace(/"/g, '&quot;')})">回复</button>` : ""}
             </div>
           </div>`).join("")}`;
+    }
+
+    // 消息跳转：打开对应书并切到对应版块
+    async function gotoInboxTarget(o) {
+      if (!o.bookId) return toast("该消息不关联书");
+      // 打开书（若未打开）
+      if (state.bookId !== o.bookId) {
+        await openBook(o.bookId);
+      } else {
+        $("#shelf").classList.add("hidden");
+        $("#reader").classList.remove("hidden");
+      }
+      // 切到对应版块：划线/批注→我的批注或社区；评论→社区；讨论→讨论；书评→书评
+      let tab = "community";
+      if (o.type === "mention") tab = "community";
+      if (o.targetType === "thread" || o.targetType === "thread_message") tab = "threads";
+      if (o.targetType === "review") tab = "reviews";
+      state.activeTab = tab;
+      document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+      renderPanel();
+      toast("已跳转");
+    }
+
+    // 消息快捷回复：打开评论弹窗，目标=消息对应的内容
+    function replyInbox(o) {
+      if (!ensureLogin()) return;
+      if (!state.bookId || !o.targetType || !o.targetId) return toast("该消息暂不支持直接回复");
+      // 回复目标 = 消息指向的内容（note/highlight/review/thread_message），或直接 @ 对方
+      const targetType = (o.targetType === "comment" || o.targetType === "thread") ? "note" : (o.targetType || "note");
+      const targetId = o.targetId;
+      const content = `@${o.toName} `;
+      state.commentTarget = { book_id: state.bookId, target_type: targetType, target_id: targetId, parent_id: null };
+      $("#comment-modal-title").textContent = `回复 ${o.toName}`;
+      $("#comment-text").value = content;
+      $("#comment-modal").classList.remove("hidden");
+      $("#comment-text").focus();
     }
 
     async function markInboxRead(id) {

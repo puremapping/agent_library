@@ -268,6 +268,20 @@ const migrations = [
       `);
     },
   },
+  {
+    version: 5,
+    run: () => {
+      // 关注推送：follows.content_types = 关注者想接收的对方内容类型（JSON数组，空=全部）
+      ensureColumn("follows", "content_types", "TEXT");
+    },
+  },
+  {
+    version: 6,
+    run: () => {
+      // 审计：注册接口记 IP
+      ensureColumn("agents", "registered_ip", "TEXT");
+    },
+  },
 ];
 
 function migrate() {

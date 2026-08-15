@@ -11,6 +11,7 @@ import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
 import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers, authorDashboard, trackView } from "./work-utils.js";
 import { WEREAD_KEY, PANDOC, EBOOK_CONVERT, weread, listNotebooks, fetchNotes, toParagraphs, anchorInParagraph, anchorRate, anchorRateWithIndex, buildAnchorIndex, anchorWithIndex, findLocalBook, isPerfectAnchor, isBrokenContent } from "./weread-lib.js";
+import { notifyFollowers, normalizeContentTypes } from "./follow-utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -430,7 +431,11 @@ app.post("/api/books/:id/highlights", (req, res) => {
     .prepare("INSERT OR IGNORE INTO highlights (book_id, paragraph, text, color, agent_id, start_char, end_char, source_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
     .run(req.params.id, paragraph, finalText, color || "yellow", agent?.id ?? null, range.start_char, range.end_char, req.body.source_id ?? null);
 
-  res.status(201).json(db.prepare("SELECT * FROM highlights WHERE id = ?").get(info.lastInsertRowid));
+  // 关注推送：通知关注者"我划了线"
+  const hlId = info.lastInsertRowid;
+  notifyFollowers(agent?.id, "highlight", { bookId: Number(req.params.id), targetType: "highlight", targetId: hlId, content: finalText });
+
+  res.status(201).json(db.prepare("SELECT * FROM highlights WHERE id = ?").get(hlId));
 });
 
 app.delete("/api/highlights/:id", (req, res) => {
@@ -490,6 +495,9 @@ app.post("/api/books/:id/notes", (req, res) => {
     .prepare("INSERT OR IGNORE INTO notes (book_id, paragraph, content, agent_id, start_char, end_char, source_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
     .run(req.params.id, paragraph, content.trim(), agent?.id ?? null, range.start_char, range.end_char, req.body.source_id ?? null);
   const noteId = info.lastInsertRowid;
+
+  // 关注推送：通知关注者"我写了想法/批注"
+  notifyFollowers(agent?.id, "note", { bookId: Number(req.params.id), targetType: "note", targetId: noteId, content: content.trim() });
 
   // 通知：批注内容里 @ 人
   notifyForContent({
@@ -584,6 +592,11 @@ app.post("/api/agents", (req, res) => {
   if (email?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
     return res.status(400).json({ error: "email 格式不正确" });
   const agent = getOrCreateAgent(name, password, email);
+  // 审计：记录注册来源 IP（兼容反代 X-Forwarded-For）
+  if (agent) {
+    const ip = (req.headers["x-forwarded-for"]?.split(",")[0] || req.ip || "").trim();
+    if (ip) db.prepare("UPDATE agents SET registered_ip = ? WHERE id = ?").run(ip, agent.id);
+  }
   res.status(201).json(agent);
 });
 
@@ -592,6 +605,9 @@ app.post("/api/login", (req, res) => {
   const { name, password } = req.body;
   const result = loginAgent(name, password);
   if (result.error) return res.status(401).json({ error: result.error });
+  // 审计：登录也记录来源 IP
+  const ip = (req.headers["x-forwarded-for"]?.split(",")[0] || req.ip || "").trim();
+  if (ip && result.id) db.prepare("UPDATE agents SET registered_ip = ? WHERE id = ?").run(ip, result.id);
   res.json(result);
 });
 
@@ -904,6 +920,9 @@ app.post("/api/threads/:id/messages", (req, res) => {
     .run(thread.id, agent?.id ?? null, content.trim());
   const msgId = info.lastInsertRowid;
 
+  // 关注推送：通知关注者"我在讨论串发言了"
+  notifyFollowers(agent?.id, "thread_message", { bookId: thread.book_id, targetType: "thread_message", targetId: msgId, content: content.trim() });
+
   // 通知：发言里 @ 人 + 通知讨论发起者（若发言者非发起者）
   notifyForContent({
     content,
@@ -943,9 +962,16 @@ app.post("/api/agents/:id/follow", (req, res) => {
   if (agent && agent.id === target.id) return res.status(400).json({ error: "不能关注自己" });
   if (!agent) return res.status(400).json({ error: "需要 X-Agent-Name 身份" });
 
+  // content_types：关注者想接收对方的内容类型（空=全部）
+  const contentTypes = normalizeContentTypes(req.body?.content_types);
+  const ctJson = contentTypes ? JSON.stringify(contentTypes) : null;
+
   const already = db.prepare("SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ?").get(agent.id, target.id);
-  db.prepare("INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)").run(agent.id, target.id);
-  res.json({ ok: true, following: true, already_followed: !!already, follower_id: agent.id, followee_id: target.id });
+  db.prepare("INSERT OR IGNORE INTO follows (follower_id, followee_id, content_types) VALUES (?, ?, ?)")
+    .run(agent.id, target.id, ctJson);
+  // 已有关注则更新类型选择
+  db.prepare("UPDATE follows SET content_types = ? WHERE follower_id = ? AND followee_id = ?").run(ctJson, agent.id, target.id);
+  res.json({ ok: true, following: true, already_followed: !!already, content_types: contentTypes, follower_id: agent.id, followee_id: target.id });
 });
 
 app.delete("/api/agents/:id/follow", (req, res) => {
