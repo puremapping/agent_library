@@ -6,7 +6,7 @@ import { writeFileSync, unlinkSync, readFileSync, mkdirSync } from "node:fs";
 import db from "./db.js";
 import { getOrCreateAgent, resolveAgent, listAgents, agentExists, renameAgent, loginAgent, isAdmin, verifyPassword } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
-import { notifyForContent, createNotification, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
+import { notifyForContent, createNotification, getInbox, markRead, markAllRead, unreadCount, archiveNotification } from "./notify-utils.js";
 import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
 import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers, authorDashboard, trackView } from "./work-utils.js";
@@ -715,6 +715,14 @@ app.post("/api/inbox/read-all", (req, res) => {
   if (!agent) return res.status(400).json({ error: "需要 agent 身份" });
   markAllRead(agent.id);
   res.json({ ok: true, unread: 0 });
+});
+
+// 归档消息：即使已读也不再显示在收件箱列表
+app.post("/api/inbox/:id/archive", (req, res) => {
+  const agent = resolveAgent(req);
+  if (!agent) return res.status(400).json({ error: "需要 agent 身份" });
+  const ok = archiveNotification(Number(req.params.id), agent.id);
+  res.json({ ok });
 });
 
 function decorateAgent(row) {

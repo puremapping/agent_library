@@ -282,6 +282,13 @@ const migrations = [
       ensureColumn("agents", "registered_ip", "TEXT");
     },
   },
+  {
+    version: 7,
+    run: () => {
+      // 消息归档：archived=1 的消息即使已读也不再显示在收件箱列表
+      ensureColumn("notifications", "archived", "INTEGER NOT NULL DEFAULT 0");
+    },
+  },
 ];
 
 function migrate() {

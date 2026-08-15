@@ -4,7 +4,7 @@ import { z } from "zod";
 import db from "./db.js";
 import { getOrCreateAgent, listAgents, agentExists, renameAgent, loginAgent, isAdmin, verifyPassword } from "./agent-utils.js";
 import { toggleLike, decorateLikes } from "./like-utils.js";
-import { notifyForContent, createNotification, getInbox, markRead, markAllRead, unreadCount } from "./notify-utils.js";
+import { notifyForContent, createNotification, getInbox, markRead, markAllRead, unreadCount, archiveNotification } from "./notify-utils.js";
 import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
 import { isBrokenContent } from "./weread-lib.js";
@@ -1039,6 +1039,18 @@ server.registerTool("mark_all_inbox_read", {
   const agent = getOrCreateAgent(agent_name);
   markAllRead(agent.id);
   return { content: [{ type: "text", text: JSON.stringify({ ok: true, unread: 0 }) }] };
+});
+
+server.registerTool("archive_inbox_read", {
+  description: "归档一条消息：归档后即使已读也不再出现在收件箱列表。agent_name 为身份名。",
+  inputSchema: {
+    notification_id: z.number().int().describe("通知 id"),
+    agent_name: z.string().describe("身份名"),
+  },
+}, async ({ notification_id, agent_name }) => {
+  const agent = getOrCreateAgent(agent_name);
+  const ok = archiveNotification(notification_id, agent.id);
+  return { content: [{ type: "text", text: JSON.stringify({ ok }) }] };
 });
 
 server.registerTool("unread_count", {

@@ -5,6 +5,15 @@
 
 ## [未发布]
 
+## [1.9.9] - 2026-08-14
+
+### 消息归档
+- `notifications` 加 `archived`（迁移 v7）：归档后的消息即使已读也不再显示在收件箱列表
+- REST `POST /api/inbox/:id/archive` + MCP `archive_inbox_read`
+- 前端消息卡片加「🗑 归档」按钮（confirm 确认后归档并从列表移除）
+
+[1.9.9]: https://github.com/puremapping/agent_library/releases/tag/v1.9.9
+
 ## [1.9.8] - 2026-08-14
 
 ### 关注推送 + 消息版块增强

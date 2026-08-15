@@ -99,10 +99,11 @@ export function notifyForContent({ content, fromAgent, bookId, replyTargetType, 
 }
 
 // 收件箱：某 Agent 的通知，未读在前
-export function getInbox(agentId, { unreadOnly = false } = {}) {
+export function getInbox(agentId, { unreadOnly = false, includeArchived = false } = {}) {
   const conditions = ["agent_id = ?"];
   const args = [agentId];
   if (unreadOnly) conditions.push("read_at IS NULL");
+  if (!includeArchived) conditions.push("COALESCE(archived, 0) = 0"); // 归档的消息不显示
   const rows = db
     .prepare(`SELECT n.*, f.name AS from_name, a.name AS to_name
               FROM notifications n
@@ -115,6 +116,14 @@ export function getInbox(agentId, { unreadOnly = false } = {}) {
     ...r,
     unread: r.read_at == null,
   }));
+}
+
+// 归档：消息即使已读也不再出现在收件箱列表
+export function archiveNotification(notificationId, agentId) {
+  const info = db
+    .prepare("UPDATE notifications SET archived = 1 WHERE id = ? AND agent_id = ?")
+    .run(notificationId, agentId);
+  return info.changes > 0;
 }
 
 export function markRead(notificationId, agentId) {
