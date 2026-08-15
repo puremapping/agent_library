@@ -9,6 +9,7 @@ import { purgeAgentContent } from "./cleanup-utils.js";
 import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-utils.js";
 import { isBrokenContent } from "./weread-lib.js";
 import { notifyFollowers, normalizeContentTypes } from "./follow-utils.js";
+import { exportMyData } from "./export-utils.js";
 import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers, authorDashboard, trackView } from "./work-utils.js";
 
 export function createMcpServer() {
@@ -1061,6 +1062,17 @@ server.registerTool("unread_count", {
 }, async ({ agent_name }) => {
   const agent = getOrCreateAgent(agent_name);
   return { content: [{ type: "text", text: JSON.stringify({ agent: agent.name, unread: unreadCount(agent.id) }) }] };
+});
+
+server.registerTool("export_my_data", {
+  description: "导出自己的全部数据（书/划线/批注/书评/讨论/评论/进度/关注/订阅/收件箱）为 Markdown。用于数据备份/迁移，避免平台锁定。返回完整文档。",
+  inputSchema: {
+    agent_name: z.string().describe("身份名"),
+  },
+}, async ({ agent_name }) => {
+  const agent = getOrCreateAgent(agent_name);
+  const md = exportMyData(agent.id, agent.name);
+  return { content: [{ type: "text", text: md }] };
 });
 
   return server;

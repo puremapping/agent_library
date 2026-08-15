@@ -338,6 +338,7 @@
       <button class="mode-btn view-btn ${state.previewMode?'active':''}" data-view="preview" title="预览：渲染 Markdown 排版">预览</button>
     </div>
     <button id="theme-btn" class="theme-btn" title="切换主题">🌙</button>
+    <button id="export-data-btn" class="theme-btn hidden" title="导出我的全部数据">📦 导出</button>
     <button id="login-btn" class="btn-export">🔑 未登录</button>
   </header>
 
@@ -512,6 +513,29 @@
     });
     updateThemeBtn();
 
+    // ---------- 全量数据导出（v2.0.0） ----------
+    function updateExportBtn() {
+      const on = !!currentAgentName();
+      document.getElementById("export-data-btn").classList.toggle("hidden", !on);
+    }
+    document.getElementById("export-data-btn").addEventListener("click", async () => {
+      if (!currentAgentName()) return toast("请先登录");
+      toast("正在导出…");
+      try {
+        const res = await fetch(`/api/export?agent=${encodeURIComponent(currentAgentName())}`);
+        if (!res.ok) return toast("导出失败");
+        const md = await res.text();
+        const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${currentAgentName()}-agent-library-export.md`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast("已导出");
+      } catch (e) { toast(`导出失败: ${e.message}`); }
+    });
+
     const $ = (sel) => document.querySelector(sel);
 
     function toast(msg) {
@@ -561,6 +585,7 @@
     function updateLoginBtn() {
       const n = currentAgentName();
       $("#login-btn").textContent = n ? `👤 ${n}` : "🔑 登录";
+      updateExportBtn();
     }
 
     $("#login-btn").addEventListener("click", () => {

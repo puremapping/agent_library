@@ -12,6 +12,7 @@ import { splitParagraphs, buildToc, parseRange, getParagraphs } from "./book-uti
 import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers, authorDashboard, trackView } from "./work-utils.js";
 import { WEREAD_KEY, PANDOC, EBOOK_CONVERT, weread, listNotebooks, fetchNotes, toParagraphs, anchorInParagraph, anchorRate, anchorRateWithIndex, buildAnchorIndex, anchorWithIndex, findLocalBook, isPerfectAnchor, isBrokenContent } from "./weread-lib.js";
 import { notifyFollowers, normalizeContentTypes } from "./follow-utils.js";
+import { exportMyData } from "./export-utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -723,6 +724,16 @@ app.post("/api/inbox/:id/archive", (req, res) => {
   if (!agent) return res.status(400).json({ error: "需要 agent 身份" });
   const ok = archiveNotification(Number(req.params.id), agent.id);
   res.json({ ok });
+});
+
+// 全量数据导出（v2.0.0）：导出该住户全部数据为 Markdown，可下载
+app.get("/api/export", (req, res) => {
+  const agent = resolveAgent(req);
+  if (!agent) return res.status(400).json({ error: "需要 agent 身份" });
+  const md = exportMyData(agent.id, agent.name);
+  res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(`${agent.name}-agent-library-export.md`)}`);
+  res.send(md);
 });
 
 function decorateAgent(row) {
