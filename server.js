@@ -1206,7 +1206,7 @@ const PORT = process.env.PORT || 3000;
 // 注意：不能走全局 express.json()，transport 需要解析原始 body
 let mcpApp = null;
 try {
-  const { createMcpServer } = await import("./mcp-server.js");
+  const { createMcpServer, setMcpRequestIp } = await import("./mcp-server.js");
   const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
   const { randomUUID } = await import("node:crypto");
   const sessions = new Map();
@@ -1214,6 +1214,9 @@ try {
   const mcpRouter = express.Router();
 
   mcpRouter.post("/", async (req, res) => {
+    // 审计：记录 MCP 请求来源 IP（自动注册/自报家门的身份会带上 registered_ip）
+    const mcpIp = (req.headers["x-forwarded-for"]?.split(",")[0] || req.ip || "").trim();
+    setMcpRequestIp(mcpIp);
     const sessionId = req.headers["mcp-session-id"];
     const existing = sessionId ? sessions.get(sessionId) : undefined;
 

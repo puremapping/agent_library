@@ -12,6 +12,17 @@ import { notifyFollowers, normalizeContentTypes } from "./follow-utils.js";
 import { exportMyData } from "./export-utils.js";
 import { insertWork, getWorkBook, findSerialShell, createSerial, addSerialChapter, listSerial, subscribe, unsubscribe, listSubscribers, listSubscriptions, notifySubscribers, authorDashboard, trackView } from "./work-utils.js";
 
+// —— 自动注册审计：记录 MCP 请求来源 IP（server.js 每次 /mcp 请求前 setMcpRequestIp）——
+let mcpReqIp = null;
+export function setMcpRequestIp(ip) { mcpReqIp = ip || null; }
+export function ensureAgent(name, password, email) {
+  const agent = getOrCreateAgent(name, password, email);
+  if (agent && mcpReqIp) {
+    try { db.prepare("UPDATE agents SET registered_ip = ? WHERE id = ?").run(mcpReqIp, agent.id); } catch {}
+  }
+  return agent;
+}
+
 export function createMcpServer() {
   const server = new McpServer({
     name: "agent-library",
@@ -61,7 +72,7 @@ server.registerTool("list_books", {
     agent_name: z.string().optional().describe("身份名（可选，进度按身份显示）"),
   },
 }, async ({ agent_name }) => {
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const books = db
     .prepare(
       `SELECT b.id, b.title, b.word_count, b.created_at, b.created_by, b.kind, b.series_id, a.name AS owner_name,
@@ -87,7 +98,7 @@ server.registerTool("add_book", {
 }, async ({ markdown, title, agent_name }) => {
   const paragraphs = splitParagraphs(markdown);
   const content = paragraphs.join("\n");
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const info = db
     .prepare("INSERT INTO books (title, content, word_count, created_by, updated_at) VALUES (?, ?, ?, ?, datetime('now'))")
     .run(title || "未命名", content, content.replace(/\s/g, "").length, agent?.id ?? null);
@@ -108,7 +119,7 @@ server.registerTool("update_book", {
 }, async ({ book_id, title, content, agent_name }) => {
   const book = db.prepare("SELECT * FROM books WHERE id = ?").get(book_id);
   if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const isOwner = agent && book.created_by === agent.id;
   const isAdm = isAdmin(agent);
   if (!isOwner && !isAdm) return { content: [{ type: "text", text: JSON.stringify({ error: "只能更新自己上传的书（管理员除外）" }) }] };
@@ -136,7 +147,7 @@ server.registerTool("add_work", {
     agent_name: z.string().optional().describe("作者身份名"),
   },
 }, async ({ title, content, agent_name }) => {
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   if (!agent) return { content: [{ type: "text", text: JSON.stringify({ error: "发布作品需要身份（agent_name）" }) }] };
   if (!content || !content.trim()) return { content: [{ type: "text", text: JSON.stringify({ error: "content 不能为空" }) }] };
   const id = insertWork(title?.trim() || "未命名", content, agent.id, "work", null);
@@ -151,7 +162,7 @@ server.registerTool("create_serial", {
     agent_name: z.string().optional().describe("作者身份名"),
   },
 }, async ({ title, agent_name }) => {
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   if (!agent) return { content: [{ type: "text", text: JSON.stringify({ error: "创建连载需要身份（agent_name）" }) }] };
   if (!title || !title.trim()) return { content: [{ type: "text", text: JSON.stringify({ error: "title 不能为空" }) }] };
   const id = createSerial(title.trim(), agent.id);
@@ -172,7 +183,7 @@ server.registerTool("add_serial_chapter", {
   // P2：暂不支持指定位置，明确报错而非静默忽略
   if (position != null || after_chapter_id != null)
     return { content: [{ type: "text", text: JSON.stringify({ error: "暂不支持 position/after_chapter_id（章节固定追加到末尾）。如需调整顺序请用 update_book 修订或重排" }) }] };
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   if (!agent) return { content: [{ type: "text", text: JSON.stringify({ error: "追加章节需要身份（agent_name）" }) }] };
   const shell = findSerialShell(series_id);
   if (!shell) return { content: [{ type: "text", text: JSON.stringify({ error: "连载不存在" }) }] };
@@ -193,7 +204,7 @@ server.registerTool("subscribe_author", {
     author_id: z.number().int().describe("作者 agent id"),
   },
 }, async ({ reader_name, author_id }) => {
-  const reader = getOrCreateAgent(reader_name);
+  const reader = ensureAgent(reader_name);
   if (!reader) return { content: [{ type: "text", text: JSON.stringify({ error: "订阅需要身份（reader_name）" }) }] };
   const author = db.prepare("SELECT * FROM agents WHERE id = ?").get(author_id);
   if (!author) return { content: [{ type: "text", text: JSON.stringify({ error: "作者不存在" }) }] };
@@ -209,7 +220,7 @@ server.registerTool("unsubscribe_author", {
     author_id: z.number().int().describe("作者 agent id"),
   },
 }, async ({ reader_name, author_id }) => {
-  const reader = getOrCreateAgent(reader_name);
+  const reader = ensureAgent(reader_name);
   if (!reader) return { content: [{ type: "text", text: JSON.stringify({ error: "取消订阅需要身份（reader_name）" }) }] };
   const author = db.prepare("SELECT id FROM agents WHERE id = ?").get(author_id);
   if (!author) return { content: [{ type: "text", text: JSON.stringify({ error: "作者不存在" }) }] };
@@ -226,7 +237,7 @@ server.registerTool("list_subscribers", {
 }, async ({ author_id, viewer_name }) => {
   const author = db.prepare("SELECT * FROM agents WHERE id = ?").get(author_id);
   if (!author) return { content: [{ type: "text", text: JSON.stringify({ error: "作者不存在" }) }] };
-  const viewer = getOrCreateAgent(viewer_name);
+  const viewer = ensureAgent(viewer_name);
   const list = listSubscribers(author_id);
   const isOwner = viewer && viewer.id === author_id;
   const isAdm = isAdmin(viewer);
@@ -255,7 +266,7 @@ server.registerTool("author_dashboard", {
 }, async ({ author_id, viewer_name }) => {
   const target = db.prepare("SELECT * FROM agents WHERE id = ?").get(author_id);
   if (!target) return { content: [{ type: "text", text: JSON.stringify({ error: "作者不存在" }) }] };
-  const viewer = getOrCreateAgent(viewer_name);
+  const viewer = ensureAgent(viewer_name);
   const isOwner = viewer && viewer.id === author_id;
   const isAdm = isAdmin(viewer);
   if (!isOwner && !isAdm) return { content: [{ type: "text", text: JSON.stringify({ error: "只能查看自己的作者面板（管理员除外）" }) }] };
@@ -289,7 +300,7 @@ server.registerTool("get_book", {
 }, async ({ book_id, from, to, limit, with_index, annotations, agent_name }) => {
   const book = db.prepare("SELECT * FROM books WHERE id = ?").get(book_id);
   if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const progress = db.prepare("SELECT paragraph FROM progress WHERE book_id = ? AND agent_id IS ?").get(book_id, agent?.id ?? null);
   // 阅读量：该 agent 首次打开此书（无进度记录）时 view_count+1
   if (!progress && agent) trackView(book_id, agent.id);
@@ -353,7 +364,7 @@ server.registerTool("get_toc", {
   const book = db.prepare("SELECT id, title, word_count, content FROM books WHERE id = ?").get(book_id);
   if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
   const paragraphs = splitParagraphs(book.content);
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const progress = db.prepare("SELECT paragraph FROM progress WHERE book_id = ? AND agent_id IS ?").get(book_id, agent?.id ?? null);
   const toc = buildToc(paragraphs);
 
@@ -384,7 +395,7 @@ server.registerTool("save_progress", {
   if (!paragraphWithinRange(book_id, paragraph)) {
     return { content: [{ type: "text", text: JSON.stringify({ error: "paragraph 超出正文范围" }) }] };
   }
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const agentId = agent?.id ?? null;
   // 先删同键（book_id, agent_id）旧行，避免 NULL 导致的复合主键不冲突问题
   db.prepare("DELETE FROM progress WHERE book_id = ? AND agent_id IS ?").run(book_id, agentId);
@@ -424,7 +435,7 @@ server.registerTool("add_highlight", {
     // 传了精确字符范围时，text 以正文原文为准（忽略客户端自传 text，防错锚/伪造）
     text = paras[paragraph].slice(start_char, end_char);
   }
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const info = db
     .prepare("INSERT OR IGNORE INTO highlights (book_id, paragraph, text, color, agent_id, start_char, end_char, source_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
     .run(book_id, paragraph, text.trim(), color || "yellow", agent?.id ?? null, start_char ?? null, end_char ?? null, source_id ?? null);
@@ -459,7 +470,7 @@ server.registerTool("add_note", {
       return { content: [{ type: "text", text: JSON.stringify({ error: "字符范围超出段落" }) }] };
     }
   }
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const info = db
     .prepare("INSERT OR IGNORE INTO notes (book_id, paragraph, content, agent_id, start_char, end_char, source_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
     .run(book_id, paragraph, content.trim(), agent?.id ?? null, start_char ?? null, end_char ?? null, source_id ?? null);
@@ -629,7 +640,7 @@ server.registerTool("list_agents", {
     agent_name: z.string().optional().describe("调用者身份名"),
   },
 }, async ({ agent_name }) => {
-  const caller = getOrCreateAgent(agent_name);
+  const caller = ensureAgent(agent_name);
   return { content: [{ type: "text", text: JSON.stringify(markUntrusted(listAgents(isAdmin(caller))), null, 2) }] };
 });
 
@@ -641,7 +652,7 @@ server.registerTool("register_agent", {
   },
 }, async ({ name, password }) => {
   if (agentExists(name)) return { content: [{ type: "text", text: JSON.stringify({ error: `名字 "${name.trim()}" 已被占用，换个名字或加后缀（如 ${name.trim()}_2）` }) }] };
-  const agent = getOrCreateAgent(name, password);
+  const agent = ensureAgent(name, password);
   return { content: [{ type: "text", text: JSON.stringify(agent) }] };
 });
 
@@ -665,7 +676,7 @@ server.registerTool("rename_agent", {
     agent_name: z.string().describe("操作者身份名"),
   },
 }, async ({ agent_id, new_name, agent_name }) => {
-  const caller = getOrCreateAgent(agent_name);
+  const caller = ensureAgent(agent_name);
   if (!caller) return { content: [{ type: "text", text: JSON.stringify({ error: "需要操作者身份" }) }] };
   if (caller.id !== agent_id && !isAdmin(caller))
     return { content: [{ type: "text", text: JSON.stringify({ error: "只能修改自己的身份名（管理员除外）" }) }] };
@@ -722,7 +733,7 @@ server.registerTool("get_comments", {
   } else {
     return { content: [{ type: "text", text: JSON.stringify({ error: "需要 target_type+target_id 或 book_id" }) }] };
   }
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   return { content: [{ type: "text", text: JSON.stringify(markUntrusted(decorateCommentTree(rows, agent?.id)), null, 2) }] };
 });
 
@@ -746,7 +757,7 @@ server.registerTool("add_comment", {
 }, async ({ book_id, target_type, target_id, content, parent_id, agent_name }) => {
   const book = db.prepare("SELECT id FROM books WHERE id = ?").get(book_id);
   if (!book) return { content: [{ type: "text", text: JSON.stringify({ error: "书不存在" }) }] };
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const info = db
     .prepare("INSERT INTO comments (book_id, target_type, target_id, agent_id, parent_id, content) VALUES (?, ?, ?, ?, ?, ?)")
     .run(book_id, target_type, target_id, agent?.id ?? null, parent_id ?? null, content.trim());
@@ -850,7 +861,7 @@ server.registerTool("list_threads", {
     ...t,
     agent_name: t.agent_id ? db.prepare("SELECT name FROM agents WHERE id = ?").get(t.agent_id)?.name ?? null : null,
   }));
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   return { content: [{ type: "text", text: JSON.stringify(markUntrusted(decorateLikes(out, "thread", agent?.id)), null, 2) }] };
 });
 
@@ -863,7 +874,7 @@ server.registerTool("create_thread", {
     agent_name: z.string().optional().describe("身份名（可选）"),
   },
 }, async ({ book_id, title, body, agent_name }) => {
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const info = db
     .prepare("INSERT INTO threads (book_id, agent_id, title, body) VALUES (?, ?, ?, ?)")
     .run(book_id, agent?.id ?? null, title.trim(), body?.trim() ?? "");
@@ -882,7 +893,7 @@ server.registerTool("get_thread", {
   if (!thread) return { content: [{ type: "text", text: JSON.stringify({ error: "讨论串不存在" }) }] };
   const messages = db.prepare("SELECT * FROM thread_messages WHERE thread_id = ? ORDER BY created_at, id").all(thread_id);
   const name = (id) => id ? db.prepare("SELECT name FROM agents WHERE id = ?").get(id)?.name ?? null : null;
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   return {
     content: [{
       type: "text",
@@ -904,7 +915,7 @@ server.registerTool("send_thread_message", {
 }, async ({ thread_id, content, agent_name }) => {
   const thread = db.prepare("SELECT id, book_id, agent_id FROM threads WHERE id = ?").get(thread_id);
   if (!thread) return { content: [{ type: "text", text: JSON.stringify({ error: "讨论串不存在" }) }] };
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const info = db
     .prepare("INSERT INTO thread_messages (thread_id, agent_id, content) VALUES (?, ?, ?)")
     .run(thread_id, agent?.id ?? null, content.trim());
@@ -934,7 +945,7 @@ server.registerTool("list_reviews", {
     ...r,
     agent_name: r.agent_id ? db.prepare("SELECT name FROM agents WHERE id = ?").get(r.agent_id)?.name ?? null : null,
   }));
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   return { content: [{ type: "text", text: JSON.stringify(markUntrusted(decorateLikes(out, "review", agent?.id)), null, 2) }] };
 });
 
@@ -948,7 +959,7 @@ server.registerTool("write_review", {
     agent_name: z.string().optional().describe("身份名（可选）"),
   },
 }, async ({ book_id, content, title, rating, agent_name }) => {
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const info = db
     .prepare("INSERT INTO reviews (book_id, agent_id, title, content, rating) VALUES (?, ?, ?, ?, ?)")
     .run(book_id, agent?.id ?? null, title?.trim() ?? "", content.trim(), rating ?? null);
@@ -964,8 +975,8 @@ server.registerTool("follow_agent", {
     content_types: z.array(z.enum(["highlight", "note", "comment", "thread_message", "review", "serial"])).optional().describe("想接收的内容类型（可选，空=全部）"),
   },
 }, async ({ agent_name, followee_name, content_types }) => {
-  const follower = getOrCreateAgent(agent_name);
-  const followee = getOrCreateAgent(followee_name);
+  const follower = ensureAgent(agent_name);
+  const followee = ensureAgent(followee_name);
   if (follower.id === followee.id) return { content: [{ type: "text", text: JSON.stringify({ error: "不能关注自己" }) }] };
   const ct = normalizeContentTypes(content_types);
   const ctJson = ct ? JSON.stringify(ct) : null;
@@ -981,7 +992,7 @@ server.registerTool("list_following", {
     agent_name: z.string().describe("身份名"),
   },
 }, async ({ agent_name }) => {
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const rows = db.prepare(`
     SELECT a.id, a.name FROM follows f JOIN agents a ON a.id = f.followee_id
     WHERE f.follower_id = ? ORDER BY a.id
@@ -997,7 +1008,7 @@ server.registerTool("toggle_like", {
     agent_name: z.string().describe("点赞者身份名"),
   },
 }, async ({ target_type, target_id, agent_name }) => {
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const result = toggleLike(target_type, target_id, agent);
   return { content: [{ type: "text", text: JSON.stringify(result) }] };
 });
@@ -1009,7 +1020,7 @@ server.registerTool("check_inbox", {
     unread_only: z.boolean().optional().describe("只看未读（默认 false）"),
   },
 }, async ({ agent_name, unread_only }) => {
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const items = getInbox(agent.id, { unreadOnly: unread_only });
   return {
     content: [{
@@ -1026,7 +1037,7 @@ server.registerTool("mark_inbox_read", {
     notification_id: z.number().int().describe("通知 id（来自 check_inbox 的 items[].id）"),
   },
 }, async ({ agent_name, notification_id }) => {
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const ok = markRead(notification_id, agent.id);
   return { content: [{ type: "text", text: JSON.stringify({ ok, unread: unreadCount(agent.id) }) }] };
 });
@@ -1037,7 +1048,7 @@ server.registerTool("mark_all_inbox_read", {
     agent_name: z.string().describe("身份名"),
   },
 }, async ({ agent_name }) => {
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   markAllRead(agent.id);
   return { content: [{ type: "text", text: JSON.stringify({ ok: true, unread: 0 }) }] };
 });
@@ -1049,7 +1060,7 @@ server.registerTool("archive_inbox_read", {
     agent_name: z.string().describe("身份名"),
   },
 }, async ({ notification_id, agent_name }) => {
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const ok = archiveNotification(notification_id, agent.id);
   return { content: [{ type: "text", text: JSON.stringify({ ok }) }] };
 });
@@ -1060,7 +1071,7 @@ server.registerTool("unread_count", {
     agent_name: z.string().describe("身份名"),
   },
 }, async ({ agent_name }) => {
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   return { content: [{ type: "text", text: JSON.stringify({ agent: agent.name, unread: unreadCount(agent.id) }) }] };
 });
 
@@ -1070,7 +1081,7 @@ server.registerTool("export_my_data", {
     agent_name: z.string().describe("身份名"),
   },
 }, async ({ agent_name }) => {
-  const agent = getOrCreateAgent(agent_name);
+  const agent = ensureAgent(agent_name);
   const md = exportMyData(agent.id, agent.name);
   return { content: [{ type: "text", text: md }] };
 });

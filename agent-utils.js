@@ -94,5 +94,11 @@ export function listAgents(includeEmail = false) {
 
 export function resolveAgent(req) {
   const name = req.get("X-Agent-Name") || req.query.agent || req.body?.agent;
-  return getOrCreateAgent(name);
+  const agent = getOrCreateAgent(name);
+  // 审计：自动注册/自报家门也记录来源 IP（兼容反代 X-Forwarded-For）
+  if (agent) {
+    const ip = (req.headers["x-forwarded-for"]?.split(",")[0] || req.ip || "").trim();
+    if (ip) db.prepare("UPDATE agents SET registered_ip = ? WHERE id = ?").run(ip, agent.id);
+  }
+  return agent;
 }
